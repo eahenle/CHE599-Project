@@ -66,7 +66,7 @@ begin
 	# apply column names to dataframes
 	names!(df_train, [names..., :class])
 	names!(df_test, [names..., :class])
-end;
+end
 
 # ╔═╡ 27244ebe-3759-11eb-2d88-0ba8438faee3
 md"""
@@ -85,7 +85,9 @@ begin
 end
 
 # ╔═╡ be196aa0-37e4-11eb-1d80-1beaf28195f2
-
+md"""
+Histograms of feature distributions:
+"""
 
 # ╔═╡ 9441cc20-3755-11eb-189a-3f44dd62bc13
 begin
@@ -133,18 +135,13 @@ Here is the Data Flow Diagram describing the ML architechture we employed:
 # ╔═╡ edd07970-3756-11eb-2032-978d73caf455
 md"""
 Categorical data must be cast to pseudo-numeric for PCA.  We used one-hot-drop-one encoding, meaning that for each categorical variable with $n$ represented categories, there will be $n-1$ new Boolean columns indicating whether or not the example belongs to any given category.
-"""
 
-# ╔═╡ d2b50340-35d0-11eb-3d85-2dc942f49a2b
-one_hot_encoder = OneHotEncoder(drop="first", sparse=false)
-
-# ╔═╡ 6cb5d370-3757-11eb-011d-8fe6b3ce6c2b
-md"""
 The `String`-type columns of data are the only ones that should be encoded.  Column 39 is the classification label, so it is also excluded from encoding.  The net result is an addition of 5 feature columns.
 """
 
 # ╔═╡ 478fde60-35d1-11eb-0f84-3f8344536cc0
 begin
+	one_hot_encoder = OneHotEncoder(drop="first", sparse=false)
 	# peel off all String-type columns
 	str_cols = [names[i] for (i,col) in enumerate(eachcol(df_train)) if typeof(col[1]) == String && i < 39]
 	# one-hot-drop-one-encode
@@ -152,7 +149,7 @@ begin
 	# put one_hot_encoded back into DF form, attach col names
 	converted = convert(DataFrame, one_hot_encoded)
 	names!(converted, [convert(Symbol, name) for name in one_hot_encoder.get_feature_names()])
-end;
+end
 
 # ╔═╡ ba96b11e-3763-11eb-201b-a7d75f5c2407
 md"""
@@ -166,10 +163,6 @@ begin
 	stdscaler = StandardScaler()
 	numerics_train = convert(DataFrame, stdscaler.fit_transform(numerics_train))
 	names!(numerics_train, num_cols)
-end
-
-# ╔═╡ 83978260-372e-11eb-3034-71d93524b5f9
-begin
 	numerics_test = convert(Matrix, df_test[:, num_cols])
 	numerics_test = convert(DataFrame, stdscaler.transform(numerics_test))
 	names!(numerics_test, num_cols)
@@ -440,16 +433,13 @@ str_cols[[7, 9, 29]]
 # ╠═b55f45b0-3785-11eb-38f7-e1bfd7e819ca
 # ╟─be196aa0-37e4-11eb-1d80-1beaf28195f2
 # ╠═9441cc20-3755-11eb-189a-3f44dd62bc13
-# ╠═2c667e10-3783-11eb-33b4-fdc606f5ab89
+# ╟─2c667e10-3783-11eb-33b4-fdc606f5ab89
 # ╠═b0fb4f50-3785-11eb-0b70-b35912d6f61f
 # ╟─a2124920-3754-11eb-2468-fdde8eec9a6d
 # ╟─edd07970-3756-11eb-2032-978d73caf455
-# ╠═d2b50340-35d0-11eb-3d85-2dc942f49a2b
-# ╟─6cb5d370-3757-11eb-011d-8fe6b3ce6c2b
 # ╠═478fde60-35d1-11eb-0f84-3f8344536cc0
-# ╠═ba96b11e-3763-11eb-201b-a7d75f5c2407
+# ╟─ba96b11e-3763-11eb-201b-a7d75f5c2407
 # ╠═ecd57112-3729-11eb-37a5-61ae29db9853
-# ╠═83978260-372e-11eb-3034-71d93524b5f9
 # ╠═d313c510-35d0-11eb-28e4-9de2f998c526
 # ╠═a1d25690-372b-11eb-17ad-b73016fa7b55
 # ╠═8f22eb2e-374a-11eb-3d32-43a290d79ea8
