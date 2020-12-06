@@ -9,7 +9,8 @@ using CSV, DataFrames, ScikitLearn, StatsBase, LinearAlgebra, PyPlot
 
 # ╔═╡ a0953640-35b8-11eb-1357-37314995bbd0
 md"
-# Annealed Steel
+# Annealed Steel: PCA & Ensemble SVM
+### Adrian Henle & Bo Ding
 "
 
 # ╔═╡ b84dac80-3758-11eb-27a8-0f51c7f7b8c3
@@ -29,7 +30,7 @@ begin
 	@sk_import preprocessing : (OneHotEncoder, StandardScaler)
 	@sk_import decomposition : PCA
 	@sk_import svm: SVC
-	@sk_import metrics : roc_auc_score
+	@sk_import metrics : (roc_auc_score, plot_roc_curve)
 end;
 
 # ╔═╡ 6075f110-3722-11eb-228e-67a4b6fd8e79
@@ -53,7 +54,7 @@ begin
 	attr_idx = [occursin(r"    ?[0-9]?[0-9]. [a-z]", line) for line ∈ namesfiledata]
 	names = Symbol[]
 	# loop over attribute lines
-	for line in namesfiledata[attr_idx]
+	for line ∈ namesfiledata[attr_idx]
 		# split on whitespace, drop ""
 		nowhitespace = filter(ss -> ss ≠ "", split(line, " "))
 		# get id of token containing name
@@ -75,9 +76,6 @@ There are six grade classes (1-5 and "U") and there are 38 data features per exa
 
 # ╔═╡ 3035eb40-37f4-11eb-3a63-a32e8341fb02
 df_train
-
-# ╔═╡ 29a41860-37f4-11eb-0e61-2515223f1458
-combine(g -> DataFrame(proportion=nrow(g)/nrow(df_train)), groupby(df_train, :class))
 
 # ╔═╡ b55f45b0-3785-11eb-38f7-e1bfd7e819ca
 # pie chart
@@ -116,22 +114,39 @@ We can also see that our numerical variables have some decent-looking variance. 
 Correlation plots of numeric feature spaces:
 """
 
-# ╔═╡ b0fb4f50-3785-11eb-0b70-b35912d6f61f
+# ╔═╡ f3fbdd8e-37ff-11eb-3415-07227ed8d254
 # correlation plots
 begin
-	clf()
-	figure()
-	for class in groupby(df_train, :class)
-		scatter(class[:, :hardness], class[:, :carbon], label=class[1, :class])
+	feature_combos = [
+		[:carbon, :hardness], [:carbon, :strength], [:strength, :hardness]]
+	
+	class_groups = groupby(df_train, :class)
+	fig2, axs2 = subplots(2, 2)
+	for (k, class) ∈ enumerate(class_groups)
+		for (l, features) ∈ enumerate(feature_combos)
+			axs2[l].scatter(class[:, features[1]], class[:, features[2]],
+				facecolor="none", color="C$k")
+			axs2[l].set_xlabel(features[1])
+			axs2[l].set_ylabel(features[2])
+		end
 	end
+	axs2[4].axis("off")
+	fig2.legend(title = "class", labels=[k[1] for k ∈ keys(class_groups)], 
+		loc=(0.75, 0.15))
+	tight_layout()
 	gcf()
 end
+
+# ╔═╡ 6c3111d0-3801-11eb-18dc-fb8b3df686fe
+md"""
+Clearly, the numeric columns alone will not lead to good decision boundaries.  Visualizing the categorical variables for correlation with class is messy.  It would be better if we could treat all of our features as [pseudo]numeric.
+"""
 
 # ╔═╡ a2124920-3754-11eb-2468-fdde8eec9a6d
 md"""
 ## Approach
 
-To render the problem more approachable, we decided to reduce the dimensionality of the input data via Principal Component Analysis (PCA). After dimensional reduction, we train an ensemble of Support Vector Machines (SVMs) to perform multi-class classification.
+To render the problem more approachable, we decided to reduce the dimensionality of the input data via Principal Component Analysis (PCA). After dimensional reduction, we train an ensemble of Support Vector Machines (SVMs) to perform multi-class classification.  The reason for using an ensemble instead of a single SVM for classification is the small number of training data; the weak learners of the ensemble will help capture more variance of the original data set without overfitting.
 
 Here is the Data Flow Diagram describing the ML architechture we employed:
 
@@ -140,21 +155,27 @@ Here is the Data Flow Diagram describing the ML architechture we employed:
 
 # ╔═╡ edd07970-3756-11eb-2032-978d73caf455
 md"""
-Categorical data must be cast to pseudo-numeric for PCA.  We used one-hot-drop-one encoding, meaning that for each categorical variable with $n$ represented categories, there will be $n-1$ new Boolean columns indicating whether or not the example belongs to any given category.
+## Data Preparation
+
+Categorical data must be cast to pseudo-numeric for PCA.  We used one-hot-drop-one encoding, meaning that each categorical variable with $n$ represented categories will be replaced by $n-1$ Boolean columns indicating whether or not the example belongs to any given category.
 
 The `String`-type columns of data are the only ones that should be encoded.  Column 39 is the classification label, so it is also excluded from encoding.  The net result is an addition of 5 feature columns.
 """
 
 # ╔═╡ 478fde60-35d1-11eb-0f84-3f8344536cc0
 begin
-	one_hot_encoder = OneHotEncoder(drop="first", sparse=false)
 	# peel off all String-type columns
-	str_cols = [names[i] for (i,col) in enumerate(eachcol(df_train)) if typeof(col[1]) == String && i < 39]
-	# one-hot-drop-one-encode
-	one_hot_encoded = one_hot_encoder.fit_transform(convert(Matrix, df_train[:, str_cols]))
-	# put one_hot_encoded back into DF form, attach col names
-	converted = convert(DataFrame, one_hot_encoded)
-	converted = rename(converted, [convert(Symbol, name) for name in one_hot_encoder.get_feature_names()])
+	str_cols = [names[i] for (i,col) ∈ enumerate(eachcol(df_train)) if typeof(col[1]) == String && i < 39]
+	# prepare the one-hot-drop-one encoder
+	one_hot_encoder = OneHotEncoder(drop="first", sparse=false)
+	# do the encoding
+	train_encoded = one_hot_encoder.fit_transform(convert(Matrix, df_train[:, str_cols]))
+	# put train_encoded back into DF form, attach col names
+	train_encoded = convert(DataFrame, train_encoded)
+	train_encoded = rename(train_encoded, [convert(Symbol, name) for name ∈ one_hot_encoder.get_feature_names()])
+	test_encoded = one_hot_encoder.transform(convert(Matrix, df_test[:, str_cols]))
+	test_encoded = convert(DataFrame, test_encoded)
+	test_encoded = rename(test_encoded, [convert(Symbol, name) for name ∈ one_hot_encoder.get_feature_names()])
 end
 
 # ╔═╡ ba96b11e-3763-11eb-201b-a7d75f5c2407
@@ -182,144 +203,116 @@ Now we can recombine the numerical and encoded data.  It is also a good time to 
 # ╔═╡ d313c510-35d0-11eb-28e4-9de2f998c526
 begin
 	# combine pre-processed data
-	clean_training_data = hcat(numerics_train, converted)
+	clean_training_data = hcat(numerics_train, train_encoded)
+	clean_test_data = hcat(numerics_test, test_encoded)
 	# drop length, width, thickness, and bore size data
-	select!(clean_training_data, Not(:bore)) # bore
+	for df ∈ [clean_training_data, clean_test_data]
+		for col ∈ [:bore, :len, :width, :thick]
+			select!(df, Not(col))
+		end
+	end
+	clean_training_data
 end
 
-# ╔═╡ 8f22eb2e-374a-11eb-3d32-43a290d79ea8
-begin
-	select!(clean_training_data, Not(:len))
-	select!(clean_training_data, Not(:width))
-	select!(clean_training_data, Not(:thick))
-end
+# ╔═╡ fed178d0-37f8-11eb-0dc5-a1cd4ed4d80b
+md"""
+## Principal Component Analysis
 
-# ╔═╡ 14accaa0-3728-11eb-1a83-43ac80710b65
-unique(clean_training_data[:, :strength])
-
-# ╔═╡ 5aa46890-3680-11eb-30af-a7af3580042b
-size(clean_training_data)
-
-# ╔═╡ d32689c0-35d0-11eb-3e99-0ba92d7041b5
-
-
-# ╔═╡ 81ce29b0-3752-11eb-3cce-f1fae2ecd0ee
-# re-vis histograms from above, but only for important features
-
-# ╔═╡ 7a3c1a50-3751-11eb-1322-bda70c8dabb3
-# do prelim. pca w/ all features
-# plot total var. captured vs. # features used
-
-# ╔═╡ 28cc25b0-3685-11eb-3f53-0b32f5135f2c
-
-
-# ╔═╡ 813ad410-3736-11eb-2b7f-0f26997e054a
-# note: test-train sub-splits would probably be better than bootstrapping
-
-# ╔═╡ 19c28e60-3734-11eb-0d8b-8f8ee1a84329
-
-
-# ╔═╡ 29d9d1e0-3695-11eb-3ab2-4ff888669c41
-test_encoded = one_hot_encoder.transform(convert(Matrix, df_test[:, str_cols]))
-
-# ╔═╡ 33cb0a20-369a-11eb-04f0-59404ead383c
-begin
-	test_converted = convert(DataFrame, test_encoded)
-		test_converted = rename(test_converted, [convert(Symbol, name) for name in one_hot_encoder.get_feature_names()])
-end
-
-# ╔═╡ 29ece4b0-3695-11eb-1367-1988b8a20517
-clean_test_data = hcat(numerics_test, test_converted)
-
-# ╔═╡ 0f01ff90-372c-11eb-3dfd-cf1d66874ad4
-# drop irrelevant physical data (size of sample shouldn't matter!)
-begin
-	select!(clean_test_data, Not(:bore)) # bore
-end
-
-# ╔═╡ a60fc110-374a-11eb-0234-dba8605864b7
-begin
-	select!(clean_test_data, Not(:len))
-	select!(clean_test_data, Not(:width))
-	select!(clean_test_data, Not(:thick))
-end
-
-# ╔═╡ ce828990-3743-11eb-19f0-916a3d16b085
-unique(df_train[:, :class])
-
-# ╔═╡ cebfb9a2-3743-11eb-06df-27ca3aecb1a1
-begin
-	# hyperparameters
-	nb_SVMs = 20
-	nb_components = 8
-	auroc_delta = false
-end;
+PCA is performed with `sklearn` to reduce the variable space to only as many dimensions as needed.  The threshold is for the number of retained principal components to account for 80% of original data variance. After learning the principal component vectors of the feature space, the training and test data must be transformed into PC-space, as approximated by the first $n$ PC vectors.
+"""
 
 # ╔═╡ d33a11c0-35d0-11eb-1aa8-37175b05bac1
-pca = PCA(n_components=nb_components)
+begin
+	pca = PCA(n_components=0.8) 
+	pca.fit(convert(Matrix, clean_training_data))
+	transformed_training_data = pca.transform(convert(Matrix, clean_training_data))
+	transformed_test_data = pca.transform(convert(Matrix, clean_test_data))
+	md"components: $(pca.n_components_)"
+end
+
+# ╔═╡ a11e94de-3805-11eb-3422-759c307d088a
+md"""
+Now instead of 47 dimensions, our data have only $(pca.n_components_).  The total variance of the original data captured by these principal components is ~ $(Int(round(sum(pca.explained_variance_ratio_), digits=2)*100))%.
+"""
 
 # ╔═╡ b578e0c0-35db-11eb-36c5-ef3331dffbed
-pca.fit(convert(Matrix, clean_training_data))
+md"""
+Now we can visualize the class distributions in the hyperplanes defined by the first three principal component vectors.
+"""
 
-# ╔═╡ cc4f3680-35dd-11eb-279b-b13dbd9ab57b
-col1 = pca.transform(convert(Matrix, clean_training_data))[:,6]
-
-# ╔═╡ 1f8942e0-3751-11eb-0b95-5bbbe03cc2bf
+# ╔═╡ 81ce29b0-3752-11eb-3cce-f1fae2ecd0ee
+# visualize distributions in hyperplanes of first three PCs
 begin
-	clf()
-	figure()
-	hist(col1, bins=20)
+	
+	pc_combos = [[:x1, :x2], [:x1, :x3], [:x3, :x2]]
+	df_transformed_training_data = convert(DataFrame, transformed_training_data)
+	df_transformed_training_data[!, :class] = df_train[:, :class]
+	transformed_class_groups = groupby(df_transformed_training_data, :class)
+	fig3, axs3 = subplots(2, 2)
+	for (k, class) ∈ enumerate(transformed_class_groups)
+		for (l, features) ∈ enumerate(pc_combos)
+			axs3[l].scatter(class[:, features[1]], class[:, features[2]], facecolor="none", color="C$k")
+			axs3[l].set_xlabel(features[1])
+			axs3[l].set_ylabel(features[2])
+		end
+	end
+	axs3[4].axis("off")
+	fig3.legend(title = "class", labels=[k[1] for k ∈ keys(class_groups)], loc=(0.75, 0.15))
+	tight_layout()
 	gcf()
 end
 
-# ╔═╡ d7f241a0-35db-11eb-3419-5b185359c3ac
-sum(pca.explained_variance_ / sum(pca.explained_variance_))
-
-# ╔═╡ ce469830-3726-11eb-2483-9b23c88fa945
-pca.explained_variance_
+# ╔═╡ e79445c0-3808-11eb-2cf2-614725027eb5
+md"""
+We can start to see that the data have been made much more separable.  Which features from the original data have the largest contributions?
+"""
 
 # ╔═╡ 4d98e940-3681-11eb-2034-259a284343f5
-findmax(pca.components_[1,:])
+begin
+	id = [m[2] for m ∈ findmax.([pca.components_[i,:] for i ∈ 1:pca.n_components_])]
+	DataFrames.names(clean_training_data)[id]
+end
 
-# ╔═╡ d96aaa60-3697-11eb-34f4-7d6d847089a4
-transformed_training_data = pca.transform(convert(Matrix, clean_training_data))
+# ╔═╡ 72565bb0-380b-11eb-2914-c55ef743a076
+md"""
+The hardness, carbon content, and tensile strength are the most important features of the first 3 principal components.  They are not the only important features, but they make the largest contributions.  Intuitively, this is good--the grade of steel is naturally dependent on these features (a fact that the PCA determined for itself!)
 
-# ╔═╡ 2a229ab0-3695-11eb-1c5d-8d0e5801f76d
-transformed_test_data = pca.transform(convert(Matrix, clean_test_data))
+## Support Vector Machine Classification
+SVM can perform multi-class classification by learning multiple decision boundaries within a mutli-dimensional space (in this case, PC-space).  We chose to use an ensemble of SVMs trained on bootstrapped data to capture additional variance beyond what a single learner can offer.
+"""
+
+# ╔═╡ 28cc25b0-3685-11eb-3f53-0b32f5135f2c
+# want to change this to sub-splitting
 
 # ╔═╡ 6d522dd2-3683-11eb-206b-3f3052492622
 begin
+	# create ensemble
+	nb_SVMs = 20
+	svc_ensemble = [SVC(decision_function_shape="ovr", break_ties=true, 
+			random_state=0, probability=true) for i ∈ 1:nb_SVMs]
+	# bootstrap data
 	bootstrap_samples = []
 	bootstrap_sample_labels = []
 	for _ ∈ 1:nb_SVMs
-	    # get id's of our random sample from our sample.
-		#   (i) with replacement
-		#   (ii) same size as our initial sample
-	    ids = StatsBase.sample(1:nrow(clean_training_data), nrow(clean_training_data), replace=true)
+	    ids = StatsBase.sample(1:nrow(clean_training_data), 
+			nrow(clean_training_data), replace=true)
 	    # store bootstrapped data
 		push!(bootstrap_samples, transformed_training_data[ids, :])
 		push!(bootstrap_sample_labels, df_train[ids, :class])
 	end
+	# train SVMs
+	for (i, svc) ∈ enumerate(svc_ensemble)
+		svc.fit(convert(Matrix, bootstrap_samples[i]), bootstrap_sample_labels[i])
+	end
 end
 
-# ╔═╡ a81a53a0-3685-11eb-3169-7d7be58f9039
-svc_ensemble = [SVC(decision_function_shape="ovr", break_ties=true, random_state=i, probability=true) for i ∈ 1:nb_SVMs]
-
-# ╔═╡ d74b5200-3685-11eb-0d19-7d316177c7aa
-for (i, svc) ∈ enumerate(svc_ensemble)
-	svc.fit(convert(Matrix, bootstrap_samples[i]), bootstrap_sample_labels[i])
-end
-
-# ╔═╡ 0a925720-3731-11eb-327d-2fddc666ee11
-svc_ensemble[1].predict_proba(transformed_training_data)
-
-# ╔═╡ ac4ce350-3691-11eb-0a4a-3795c1e627d3
-svc_ensemble[1].score(transformed_training_data, df_train.class)
-
-# ╔═╡ ce983470-3743-11eb-28d6-57d29ddb834f
-ordered_classes = svc_ensemble[1].classes_
+# ╔═╡ 1d7e9f60-380d-11eb-1b9b-d97c74029b90
+md"""
+To assess the predictive quality of each SVM, the Area Under the Receiver Operating Characteristic Curve (AUROC) is calculated for each learner by comparing it against the original (full) training data.
+"""
 
 # ╔═╡ db4af520-3731-11eb-30b5-c3ddde182cad
+# get rid of class_probabilities OR use them at end for final ROC (?)
 begin
 	aurocs = []
 	# run predict_proba on all examples for each SVM (50 x (n_samples, n_classes))
@@ -341,31 +334,40 @@ begin
 		end
 	end
 	class_probabilities ./= nb_SVMs
-end
+end;
 
-# ╔═╡ a2ed8890-3741-11eb-21cb-9735d0c30418
-aurocs
-
-# ╔═╡ fc5ce7b0-373a-11eb-3929-31a571cfb0c9
-sum.(eachrow(class_probabilities))
+# ╔═╡ 74a5b09e-3810-11eb-1c72-19fff44bb994
+md"""
+The probabilities for each class according to the ensemble are calculated on every example, and summing these over the training data returns a very good approximation of the original number of examples of each class.
+"""
 
 # ╔═╡ 4c04a3b0-373c-11eb-007c-4ba2f9af318b
-sum.(eachcol(class_probabilities))
+round.(sum.(eachcol(class_probabilities)), digits=1)
 
-# ╔═╡ 03a68a20-3741-11eb-1153-992c7a6d8bb7
-class_probabilities
+# ╔═╡ db6dd270-380d-11eb-1324-b7e4a36777ec
+md"""
+The AUROC of the ensemble for the training data is quite good: $(round(roc_auc_score(df_train[:, :class], class_probabilities, multi_class="ovr"), digits=8))
 
-# ╔═╡ 2e81cb50-3733-11eb-066d-310024101c50
-class_probabilities
-
-# ╔═╡ 814ac480-3734-11eb-13ef-a7f000537101
-roc_auc_score(df_train[:, :class], class_probabilities, multi_class="ovr")
+The AUROC score of each individual learner is very high.  This is not actually ideal!  It is better to have weaker learners in an ensemble, because some of them will catch rare cases that the others will miss.
+"""
 
 # ╔═╡ 27de9e22-3695-11eb-17ee-1d263b5128e4
-svm_scores = [svc_ensemble[i].score(transformed_training_data, df_train.class) for i ∈ 1:nb_SVMs]
+aurocs
+
+# ╔═╡ 9b37a700-3810-11eb-3a27-61d14b382ccc
+md"""
+These scores are normalized for use in ensemble classification weighting.
+"""
 
 # ╔═╡ 29c73440-3695-11eb-1de0-4992f59f8b30
-normalize!(svm_scores)
+normalize!(aurocs)
+
+# ╔═╡ b849d250-3810-11eb-1cfd-33bc2e0edd08
+md"""
+## Model Validation on Operating Data
+
+The time has come to evaluate the model on our reserved testing data.  Fist, an array of probability matrices is collected, with one matrix for each SVM, containing the class probability estimates for each class on each test example.
+"""
 
 # ╔═╡ 2a349c10-3695-11eb-3c5f-6734facd0931
 begin
@@ -383,18 +385,22 @@ begin
 	end
 end
 
-# ╔═╡ f0eeda0e-369e-11eb-149b-9db412ff10bd
-prob_mats
-
-# ╔═╡ 2a6a03f0-3695-11eb-3be8-2db07954660a
-for i ∈ 1:nb_SVMs # loop over SVM probability matrices
-	# multiply each value in matrix i in prob_mats by svm_score[i]
-	prob_mats[i] .*= aurocs[i] - 0.5*auroc_delta
-end
+# ╔═╡ ff3270a0-3810-11eb-2ae1-99cc096d7a28
+md"""
+The probabilities are attenuated by multiplying them against the SVMs' normalized training AUROC scores, and accumulating the sums so that we end up with an array of 5 weighted class scores for each test example.  The largest score decides the classification.
+"""
 
 # ╔═╡ a11770a0-369f-11eb-183f-3559fde51376
 begin
-	sums = zeros(nrow(df_test), length(unique(df_train.class))) # one array of 5 score sums for each test example
+	# for increasing effect of AUROC attenuation
+	auroc_delta = false
+	# loop over SVM probability matrices
+	for i ∈ 1:nb_SVMs
+		# multiply each value in matrix i in prob_mats by svm_score[i]
+		prob_mats[i] .*= aurocs[i] - 0.5*auroc_delta
+	end
+	# one array of 5 score sums for each test example
+	sums = zeros(nrow(df_test), length(unique(df_train.class)))
 	for i ∈ 1:nb_SVMs
 		for j ∈ 1:nrow(df_test)
 			for k ∈ 1:length(unique(df_train.class))
@@ -404,35 +410,41 @@ begin
 	end
 end
 
-# ╔═╡ a164f462-369f-11eb-1ae5-698510068e43
-unique(findmax.(eachrow(sums)))
-
 # ╔═╡ ce549bc0-3743-11eb-01cb-bfeca5d4acbf
-final_predictions = [ordered_classes[t[2]] for t ∈ findmax.(eachrow(sums))]
+begin
+	final_predictions = 
+		[svc_ensemble[1].classes_[t[2]] for t ∈ findmax.(eachrow(sums))]
+	result_df = DataFrame(predicted=final_predictions, actual=df_test.class, 
+		correct=final_predictions .== df_test.class)
+end
 
-# ╔═╡ ceac0a90-3743-11eb-1cce-e7b4c8eb5a55
-final_predictions[[df_test[i, :class] ≠ final_predictions[i] for i ∈ 1:nrow(df_test)]]
+# ╔═╡ 97fabff0-381a-11eb-3cf0-bf1dc364e7c0
+md"""
+The ensemble mis-classifies $(count(c -> c == false, result_df.correct)) of $(nrow(df_test)) test cases.
+"""
 
-# ╔═╡ e99c6a80-3747-11eb-12d2-33d4c5322b52
-length(final_predictions[[df_test[i, :class] ≠ final_predictions[i] for i ∈ 1:nrow(df_test)]])
+# ╔═╡ 2432c320-3814-11eb-1a5e-47d42e372ec7
+md"""
+## ROC Curve for Ensemble
 
-# ╔═╡ ced3419e-3743-11eb-0766-93ae85a72895
-findmax.(abs.(pca.components_[i,:]) for i ∈ 1:nb_components)
+Finally, we take a look at the ROC curves of the ensemble and its individual weak learners, and calculate the ensemble-averaged AUC.
+"""
 
-# ╔═╡ cee5b830-3743-11eb-1bea-55606f41ea57
-pca.components_[1,:]
+# ╔═╡ dbe4084e-3817-11eb-3a98-4908c2e257ff
+# pack into callable function?
 
-# ╔═╡ cefce9ae-3743-11eb-10b0-715d2ad4a2fd
-findmax.(eachrow(pca.components_))
+# ╔═╡ 3ab3dee0-3814-11eb-16d4-537cd026e2c2
+# calculate actual AUC
 
-# ╔═╡ cf0bddd0-3743-11eb-3799-db73c43b0aac
-[t[2] for t in findmax.(eachrow(pca.components_))]
-
-# ╔═╡ a539b1c2-375d-11eb-0cbb-2f5269f0023f
-[DataFrames.names(clean_training_data)[t[2]] for t in findmax.(eachrow(pca.components_))[1:nb_components]]
-
-# ╔═╡ 27b66352-375e-11eb-24bf-1bfeed9b7386
-str_cols[[7, 9, 29]]
+# ╔═╡ 1686d330-3817-11eb-148b-1f2d48e58579
+# plot ROC
+begin
+	figure()
+	for svc ∈ svc_ensemble
+		plot_roc_curve(ml_model, convert(Matrix, clean_test_data), df_test[:, :class])
+	end
+	gcf()
+end
 
 # ╔═╡ Cell order:
 # ╟─a0953640-35b8-11eb-1357-37314995bbd0
@@ -444,12 +456,12 @@ str_cols[[7, 9, 29]]
 # ╠═40338f72-3759-11eb-2f23-a56baa6bb364
 # ╟─27244ebe-3759-11eb-2d88-0ba8438faee3
 # ╠═3035eb40-37f4-11eb-3a63-a32e8341fb02
-# ╠═29a41860-37f4-11eb-0e61-2515223f1458
 # ╠═b55f45b0-3785-11eb-38f7-e1bfd7e819ca
 # ╟─be196aa0-37e4-11eb-1d80-1beaf28195f2
 # ╠═9441cc20-3755-11eb-189a-3f44dd62bc13
 # ╟─2c667e10-3783-11eb-33b4-fdc606f5ab89
-# ╠═b0fb4f50-3785-11eb-0b70-b35912d6f61f
+# ╠═f3fbdd8e-37ff-11eb-3415-07227ed8d254
+# ╟─6c3111d0-3801-11eb-18dc-fb8b3df686fe
 # ╟─a2124920-3754-11eb-2468-fdde8eec9a6d
 # ╟─edd07970-3756-11eb-2032-978d73caf455
 # ╠═478fde60-35d1-11eb-0f84-3f8344536cc0
@@ -457,57 +469,31 @@ str_cols[[7, 9, 29]]
 # ╠═ecd57112-3729-11eb-37a5-61ae29db9853
 # ╟─a5bdcc10-37f0-11eb-1f37-0b29a30b8927
 # ╠═d313c510-35d0-11eb-28e4-9de2f998c526
-# ╠═8f22eb2e-374a-11eb-3d32-43a290d79ea8
-# ╠═14accaa0-3728-11eb-1a83-43ac80710b65
-# ╠═5aa46890-3680-11eb-30af-a7af3580042b
-# ╠═d32689c0-35d0-11eb-3e99-0ba92d7041b5
+# ╟─fed178d0-37f8-11eb-0dc5-a1cd4ed4d80b
 # ╠═d33a11c0-35d0-11eb-1aa8-37175b05bac1
-# ╠═b578e0c0-35db-11eb-36c5-ef3331dffbed
-# ╠═cc4f3680-35dd-11eb-279b-b13dbd9ab57b
+# ╟─a11e94de-3805-11eb-3422-759c307d088a
+# ╟─b578e0c0-35db-11eb-36c5-ef3331dffbed
 # ╠═81ce29b0-3752-11eb-3cce-f1fae2ecd0ee
-# ╠═1f8942e0-3751-11eb-0b95-5bbbe03cc2bf
-# ╠═7a3c1a50-3751-11eb-1322-bda70c8dabb3
-# ╠═d7f241a0-35db-11eb-3419-5b185359c3ac
-# ╠═ce469830-3726-11eb-2483-9b23c88fa945
+# ╟─e79445c0-3808-11eb-2cf2-614725027eb5
 # ╠═4d98e940-3681-11eb-2034-259a284343f5
-# ╠═d96aaa60-3697-11eb-34f4-7d6d847089a4
-# ╠═6d522dd2-3683-11eb-206b-3f3052492622
+# ╟─72565bb0-380b-11eb-2914-c55ef743a076
 # ╠═28cc25b0-3685-11eb-3f53-0b32f5135f2c
-# ╠═a81a53a0-3685-11eb-3169-7d7be58f9039
-# ╠═d74b5200-3685-11eb-0d19-7d316177c7aa
-# ╠═0a925720-3731-11eb-327d-2fddc666ee11
+# ╠═6d522dd2-3683-11eb-206b-3f3052492622
+# ╟─1d7e9f60-380d-11eb-1b9b-d97c74029b90
 # ╠═db4af520-3731-11eb-30b5-c3ddde182cad
-# ╠═a2ed8890-3741-11eb-21cb-9735d0c30418
-# ╠═fc5ce7b0-373a-11eb-3929-31a571cfb0c9
+# ╟─74a5b09e-3810-11eb-1c72-19fff44bb994
 # ╠═4c04a3b0-373c-11eb-007c-4ba2f9af318b
-# ╠═03a68a20-3741-11eb-1153-992c7a6d8bb7
-# ╠═813ad410-3736-11eb-2b7f-0f26997e054a
-# ╠═2e81cb50-3733-11eb-066d-310024101c50
-# ╠═19c28e60-3734-11eb-0d8b-8f8ee1a84329
-# ╠═814ac480-3734-11eb-13ef-a7f000537101
-# ╠═ac4ce350-3691-11eb-0a4a-3795c1e627d3
+# ╟─db6dd270-380d-11eb-1324-b7e4a36777ec
 # ╠═27de9e22-3695-11eb-17ee-1d263b5128e4
+# ╟─9b37a700-3810-11eb-3a27-61d14b382ccc
 # ╠═29c73440-3695-11eb-1de0-4992f59f8b30
-# ╠═29d9d1e0-3695-11eb-3ab2-4ff888669c41
-# ╠═33cb0a20-369a-11eb-04f0-59404ead383c
-# ╠═29ece4b0-3695-11eb-1367-1988b8a20517
-# ╠═0f01ff90-372c-11eb-3dfd-cf1d66874ad4
-# ╠═a60fc110-374a-11eb-0234-dba8605864b7
-# ╠═2a229ab0-3695-11eb-1c5d-8d0e5801f76d
+# ╟─b849d250-3810-11eb-1cfd-33bc2e0edd08
 # ╠═2a349c10-3695-11eb-3c5f-6734facd0931
-# ╠═2a6a03f0-3695-11eb-3be8-2db07954660a
-# ╠═f0eeda0e-369e-11eb-149b-9db412ff10bd
+# ╟─ff3270a0-3810-11eb-2ae1-99cc096d7a28
 # ╠═a11770a0-369f-11eb-183f-3559fde51376
-# ╠═a164f462-369f-11eb-1ae5-698510068e43
 # ╠═ce549bc0-3743-11eb-01cb-bfeca5d4acbf
-# ╠═ce828990-3743-11eb-19f0-916a3d16b085
-# ╠═ce983470-3743-11eb-28d6-57d29ddb834f
-# ╠═ceac0a90-3743-11eb-1cce-e7b4c8eb5a55
-# ╠═e99c6a80-3747-11eb-12d2-33d4c5322b52
-# ╠═cebfb9a2-3743-11eb-06df-27ca3aecb1a1
-# ╠═ced3419e-3743-11eb-0766-93ae85a72895
-# ╠═cee5b830-3743-11eb-1bea-55606f41ea57
-# ╠═cefce9ae-3743-11eb-10b0-715d2ad4a2fd
-# ╠═cf0bddd0-3743-11eb-3799-db73c43b0aac
-# ╠═a539b1c2-375d-11eb-0cbb-2f5269f0023f
-# ╠═27b66352-375e-11eb-24bf-1bfeed9b7386
+# ╟─97fabff0-381a-11eb-3cf0-bf1dc364e7c0
+# ╟─2432c320-3814-11eb-1a5e-47d42e372ec7
+# ╠═dbe4084e-3817-11eb-3a98-4908c2e257ff
+# ╠═3ab3dee0-3814-11eb-16d4-537cd026e2c2
+# ╠═1686d330-3817-11eb-148b-1f2d48e58579
