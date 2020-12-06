@@ -4,40 +4,48 @@
 using Markdown
 using InteractiveUtils
 
-# ╔═╡ 0e09d780-35b9-11eb-34c7-a7ff2d86d982
-using CSV, DataFrames, ScikitLearn, StatsBase, LinearAlgebra
+# ╔═╡ 6438b5e0-3758-11eb-0594-c7267760665f
+using CSV, DataFrames, ScikitLearn, StatsBase, LinearAlgebra, PyPlot
 
 # ╔═╡ a0953640-35b8-11eb-1357-37314995bbd0
 md"
 # Annealed Steel
 "
 
+# ╔═╡ b84dac80-3758-11eb-27a8-0f51c7f7b8c3
+md"""
+![](https://miro.medium.com/max/2400/1*3MTAI9UL6AcqYidc4RSG7A.jpeg)
+"""
+
+# ╔═╡ af48970e-3755-11eb-28e7-2d3565bebbe2
+md"""
+## Goal
+
+Imagine an automated factory that makes milled steel parts from iron ore.  Somewhere along the line, you'll see something like the picture above: orange-hot steel rolling down a very long conveyor.  That steel is undergoing a process called annealing, and it has a major effect on the ultimate working properties of the steel.  If the annealing machines experience process deviations, the milling machines will need to adapt to the steel's new properties.  There is no time to get a human metallurgist to test each piece of steel and determine its grade, so we would like to train an AI on simple characterization data for rapid prediction of steel quality.
+"""
+
+# ╔═╡ 8f4f34e0-3756-11eb-2c5e-fbd1769a5605
+begin
+	@sk_import preprocessing : (OneHotEncoder, StandardScaler)
+	@sk_import decomposition : PCA
+	@sk_import svm: SVC
+	@sk_import metrics : roc_auc_score
+end;
+
 # ╔═╡ 6075f110-3722-11eb-228e-67a4b6fd8e79
 md"""
 ## Data
 
-The UC Irvine ML dataset [Annealing](https://archive.ics.uci.edu/ml/datasets/Annealing) contains a total of 868 examples of characterization data from samples of steel annealed under various conditions and labeled by grade. 100 examples are reserved for testing the model. There are six grade classes (1-5 and "U") and there are 38 data features per example.
-
-## Goal
-
-We would like to train an AI on these data for rapid prediction of steel grade based on new example data, and we would like it to require the minimum number of input features.
-
-## Approach
-
-We decided to approach this problem by reducing the dimensionality of the input data via Principal Component Analysis (PCA), and training an ensemble of Support Vector Machines (SVMs) to perform multi-class classification (MSVC).
-
-Here is the Data Flow Diagram describing the ML architechture.
-
-![DFD](https://github.com/eahenle/CHE599-Project/raw/main/CHE599_DFD.png)
+The UC Irvine ML dataset [Annealing](https://archive.ics.uci.edu/ml/datasets/Annealing) contains a total of 868 examples of characterization data from samples of steel annealed under various conditions and labeled by grade. 100 examples are reserved for testing the model (as "operational data"). These data are split between two files, `anneal.data` and `anneal.test`, with the column names provided in `anneal.names`.
 """
 
-# ╔═╡ 5c246a30-35c2-11eb-3ee2-e70dfe2b95f9
-md"
-`anneal.names` is horribly formatted!  Extract column names:
-"
 
-# ╔═╡ e232f93e-35bb-11eb-30d2-8fb4b187ada5
+# ╔═╡ 40338f72-3759-11eb-2f23-a56baa6bb364
 begin
+	# read data files
+	df_train = CSV.read("anneal.data", DataFrame, header=0)
+	df_test = CSV.read("anneal.test", DataFrame, header=0)
+	# anneal.names is full of info, not just column names
 	namesfile = open("anneal.names")
 	namesfiledata = readlines(namesfile)
 	close(namesfile)
@@ -55,63 +63,106 @@ begin
 		# add name to array
 		push!(names, Symbol(name))
 	end
-	names
-end
+	# apply column names to dataframes
+	names!(df_train, [names..., :class])
+	names!(df_test, [names..., :class])
+end;
 
-# ╔═╡ e9ba3a90-35b9-11eb-3c82-8dc71624c603
-classes = ["1", "2", "3", "4", "5", "U"]
+# ╔═╡ 27244ebe-3759-11eb-2d88-0ba8438faee3
+md"""
+There are six grade classes (1-5 and "U") and there are 38 data features per example.  Of the data features, 7 are numerical and the rest are categorical. The classes are fairly imbalanced, with class 4 totally unrepresented.
+"""
 
-# ╔═╡ 27455850-35b9-11eb-29cf-1f97fb339e66
-df_train = CSV.read("anneal.data", DataFrame, header=0)
-
-# ╔═╡ 91cffb10-3750-11eb-00c7-b9cad9abcd96
+# ╔═╡ b55f45b0-3785-11eb-38f7-e1bfd7e819ca
+# pie chart
 begin
-	using PyPlot
+	local df = by(df_train, :class, g -> DataFrame(proportion=nrow(g)/nrow(df_train)))
 	clf()
 	figure()
-	hist(df_train[:family])
+	title("Class Label Proportions")
+	pie(df.proportion, labels=unique(df.class), autopct="%d%%", shadow=true, explode=0.1 .* ones(nrow(df)), startangle=38)
 	gcf()
 end
 
-# ╔═╡ b77f525e-35cb-11eb-1bb8-8f2fabb48df0
-names!(df_train, [names..., :class])
+# ╔═╡ be196aa0-37e4-11eb-1d80-1beaf28195f2
 
-# ╔═╡ 415714e0-35b9-11eb-39db-338b9ad54699
-df_test = CSV.read("anneal.test", DataFrame, header=0)
 
-# ╔═╡ bf8a3e6e-35d0-11eb-3076-212d47a44b25
-names!(df_test, [names..., :class])
+# ╔═╡ 9441cc20-3755-11eb-189a-3f44dd62bc13
+begin
+	clf()
+	fig, axs = subplots(6, 6, sharey=true, figsize=(10,10))
+	for i = 1:(length(names)-2) # just show 36 of 38, for aesthetics
+		axs[i].hist(df_train[names[i]], bins=15)
+		axs[i].set_title(names[i])
+	end
+	subplots_adjust(hspace=0.5)
+	gcf()
+end
 
-# ╔═╡ d2a2b3c0-35d0-11eb-24f7-495a3459c779
-@sk_import preprocessing : OneHotEncoder
+# ╔═╡ 2c667e10-3783-11eb-33b4-fdc606f5ab89
+md"""
+We can see there are some features with no data.  `anneal.names` claims these factors should have some missing values, and some "not applicable" values.  The data have been corrupted, and that distinction no longer exists.
+
+We can also see that our numerical variables have some decent-looking variance.  Unfortunately, some of these measurements are not applicable to our scenario: we will not be getting our operational data from sample bits of metal with recordable length, width, thickness, and/or bore size.  That leaves carbon content, hardness rating, and tensile strength, all of which can be measured by non-destructive methods [[$1$]](https://www.matec-conferences.org/articles/matecconf/pdf/2018/04/matecconf_nctam2018_05007.pdf) [[$2$]](https://www.buehler.com/nondestructive-testing.php#:~:text=Nondestructive%20testing%20(NDT)%20or%20Nondestructive,without%20altering%20or%20destroying%20it.&text=Typical%20types%20and%20method%20of,Rebound%2C%20and%20Ultrasonic%20Contact%20Impedance.) [[$3$]](https://www.bruker.com/products/x-ray-diffraction-and-elemental-analysis/handheld-xrf/applications/pmi/non-destructive-testing-ndt-xrf.html).
+
+Correlation plots of numeric feature spaces:
+"""
+
+# ╔═╡ b0fb4f50-3785-11eb-0b70-b35912d6f61f
+# correlation plots
+begin
+	clf()
+	figure()
+	for class in groupby(df_train, :class)
+		scatter(class[:hardness], class[:carbon], label=class[1, :class])
+	end
+	gcf()
+end
+
+# ╔═╡ a2124920-3754-11eb-2468-fdde8eec9a6d
+md"""
+## Approach
+
+To render the problem more approachable, we decided to reduce the dimensionality of the input data via Principal Component Analysis (PCA). After dimensional reduction, we train an ensemble of Support Vector Machines (SVMs) to perform multi-class classification.
+
+Here is the Data Flow Diagram describing the ML architechture we employed:
+
+![DFD](https://github.com/eahenle/CHE599-Project/raw/main/CHE599_DFD.png)
+"""
+
+# ╔═╡ edd07970-3756-11eb-2032-978d73caf455
+md"""
+Categorical data must be cast to pseudo-numeric for PCA.  We used one-hot-drop-one encoding, meaning that for each categorical variable with $n$ represented categories, there will be $n-1$ new Boolean columns indicating whether or not the example belongs to any given category.
+"""
 
 # ╔═╡ d2b50340-35d0-11eb-3d85-2dc942f49a2b
 one_hot_encoder = OneHotEncoder(drop="first", sparse=false)
 
+# ╔═╡ 6cb5d370-3757-11eb-011d-8fe6b3ce6c2b
+md"""
+The `String`-type columns of data are the only ones that should be encoded.  Column 39 is the classification label, so it is also excluded from encoding.  The net result is an addition of 5 feature columns.
+"""
+
 # ╔═╡ 478fde60-35d1-11eb-0f84-3f8344536cc0
-# peel off all String-type columns
-str_cols = [names[i] for (i,col) in enumerate(eachcol(df_train)) if typeof(col[1]) == String && i < 39]
-
-# ╔═╡ 0f419560-35d3-11eb-2771-c3ca6ea4c912
-df_train[str_cols]
-
-# ╔═╡ 7c0f04b0-35d4-11eb-0489-1146ca65eb13
-str_mat = convert(Matrix, df_train[str_cols])
-
-# ╔═╡ d2c99cb0-35d0-11eb-0a13-9bb4cf692fe5
-one_hot_encoded = one_hot_encoder.fit_transform(str_mat)
-
-# ╔═╡ d2f03780-35d0-11eb-0d06-d9a99e641d5f
 begin
+	# peel off all String-type columns
+	str_cols = [names[i] for (i,col) in enumerate(eachcol(df_train)) if typeof(col[1]) == String && i < 39]
+	# one-hot-drop-one-encode
+	one_hot_encoded = one_hot_encoder.fit_transform(convert(Matrix, df_train[str_cols]))
+	# put one_hot_encoded back into DF form, attach col names
 	converted = convert(DataFrame, one_hot_encoded)
 	names!(converted, [convert(Symbol, name) for name in one_hot_encoder.get_feature_names()])
-end
+end;
+
+# ╔═╡ ba96b11e-3763-11eb-201b-a7d75f5c2407
+md"""
+The numerical columns need their own pre-processing for PCA: normalization.
+"""
 
 # ╔═╡ ecd57112-3729-11eb-37a5-61ae29db9853
 begin
 	num_cols = [col for col ∈ names if !(col ∈ str_cols)]
 	numerics_train = convert(Matrix, df_train[:, num_cols])
-	@sk_import preprocessing : StandardScaler
 	stdscaler = StandardScaler()
 	numerics_train = convert(DataFrame, stdscaler.fit_transform(numerics_train))
 	names!(numerics_train, num_cols)
@@ -134,6 +185,7 @@ select!(clean_training_data, Not(:bore)) # bore
 begin
 	select!(clean_training_data, Not(:len))
 	select!(clean_training_data, Not(:width))
+	select!(clean_training_data, Not(:thick))
 end
 
 # ╔═╡ 14accaa0-3728-11eb-1a83-43ac80710b65
@@ -143,37 +195,23 @@ unique(clean_training_data[:strength])
 size(clean_training_data)
 
 # ╔═╡ d32689c0-35d0-11eb-3e99-0ba92d7041b5
-@sk_import decomposition : PCA
+
 
 # ╔═╡ 81ce29b0-3752-11eb-3cce-f1fae2ecd0ee
-
+# re-vis histograms from above, but only for important features
 
 # ╔═╡ 7a3c1a50-3751-11eb-1322-bda70c8dabb3
-
-
-# ╔═╡ 70058230-372c-11eb-2951-bb6c9f96c587
-#@sk_import linear_model : LogisticRegression
-
-# ╔═╡ a63ff470-372c-11eb-154e-5bdf42ff336a
-#logistic_regressor = LogisticRegression()#(multi_class="multinomial")
-
-# ╔═╡ b710c3b0-372c-11eb-39ef-2b16c3b44e46
-#logistic_regressor.fit(convert(Matrix, clean_training_data), df_train[:class])
-
-# ╔═╡ 0f7b0ab0-372d-11eb-014d-cd94adcd949e
-#logistic_regressor.predict(convert(Matrix, clean_test_data))
-
-# ╔═╡ 20c69d4e-372f-11eb-27bc-b7a1ec0c23bc
-#df_test[:class]
+# do prelim. pca w/ all features
+# plot total var. captured vs. # features used
 
 # ╔═╡ 28cc25b0-3685-11eb-3f53-0b32f5135f2c
-@sk_import svm: SVC
+
 
 # ╔═╡ 813ad410-3736-11eb-2b7f-0f26997e054a
 # note: test-train sub-splits would probably be better than bootstrapping
 
 # ╔═╡ 19c28e60-3734-11eb-0d8b-8f8ee1a84329
-@sk_import metrics : roc_auc_score
+
 
 # ╔═╡ 29d9d1e0-3695-11eb-3ab2-4ff888669c41
 test_encoded = one_hot_encoder.transform(convert(Matrix, df_test[str_cols]))
@@ -197,10 +235,8 @@ end
 begin
 	select!(clean_test_data, Not(:len))
 	select!(clean_test_data, Not(:width))
+	select!(clean_test_data, Not(:thick))
 end
-
-# ╔═╡ ce6b3100-3743-11eb-3b08-cdcff67da52b
-classes
 
 # ╔═╡ ce828990-3743-11eb-19f0-916a3d16b085
 unique(df_train[:class])
@@ -381,30 +417,37 @@ findmax.(abs.(pca.components_[i,:]) for i ∈ 1:nb_components)
 pca.components_[1,:]
 
 # ╔═╡ cefce9ae-3743-11eb-10b0-715d2ad4a2fd
-
+findmax.(eachrow(pca.components_))
 
 # ╔═╡ cf0bddd0-3743-11eb-3799-db73c43b0aac
+[t[2] for t in findmax.(eachrow(pca.components_))]
 
+# ╔═╡ a539b1c2-375d-11eb-0cbb-2f5269f0023f
+[DataFrames.names(clean_training_data)[t[2]] for t in findmax.(eachrow(pca.components_))[1:nb_components]]
+
+# ╔═╡ 27b66352-375e-11eb-24bf-1bfeed9b7386
+str_cols[[7, 9, 29]]
 
 # ╔═╡ Cell order:
 # ╟─a0953640-35b8-11eb-1357-37314995bbd0
-# ╠═0e09d780-35b9-11eb-34c7-a7ff2d86d982
+# ╟─b84dac80-3758-11eb-27a8-0f51c7f7b8c3
+# ╟─af48970e-3755-11eb-28e7-2d3565bebbe2
+# ╠═6438b5e0-3758-11eb-0594-c7267760665f
+# ╠═8f4f34e0-3756-11eb-2c5e-fbd1769a5605
 # ╟─6075f110-3722-11eb-228e-67a4b6fd8e79
-# ╟─5c246a30-35c2-11eb-3ee2-e70dfe2b95f9
-# ╠═e232f93e-35bb-11eb-30d2-8fb4b187ada5
-# ╠═e9ba3a90-35b9-11eb-3c82-8dc71624c603
-# ╠═27455850-35b9-11eb-29cf-1f97fb339e66
-# ╠═b77f525e-35cb-11eb-1bb8-8f2fabb48df0
-# ╠═91cffb10-3750-11eb-00c7-b9cad9abcd96
-# ╠═415714e0-35b9-11eb-39db-338b9ad54699
-# ╠═bf8a3e6e-35d0-11eb-3076-212d47a44b25
-# ╠═d2a2b3c0-35d0-11eb-24f7-495a3459c779
+# ╠═40338f72-3759-11eb-2f23-a56baa6bb364
+# ╟─27244ebe-3759-11eb-2d88-0ba8438faee3
+# ╠═b55f45b0-3785-11eb-38f7-e1bfd7e819ca
+# ╟─be196aa0-37e4-11eb-1d80-1beaf28195f2
+# ╠═9441cc20-3755-11eb-189a-3f44dd62bc13
+# ╠═2c667e10-3783-11eb-33b4-fdc606f5ab89
+# ╠═b0fb4f50-3785-11eb-0b70-b35912d6f61f
+# ╟─a2124920-3754-11eb-2468-fdde8eec9a6d
+# ╟─edd07970-3756-11eb-2032-978d73caf455
 # ╠═d2b50340-35d0-11eb-3d85-2dc942f49a2b
+# ╟─6cb5d370-3757-11eb-011d-8fe6b3ce6c2b
 # ╠═478fde60-35d1-11eb-0f84-3f8344536cc0
-# ╠═0f419560-35d3-11eb-2771-c3ca6ea4c912
-# ╠═7c0f04b0-35d4-11eb-0489-1146ca65eb13
-# ╠═d2c99cb0-35d0-11eb-0a13-9bb4cf692fe5
-# ╠═d2f03780-35d0-11eb-0d06-d9a99e641d5f
+# ╠═ba96b11e-3763-11eb-201b-a7d75f5c2407
 # ╠═ecd57112-3729-11eb-37a5-61ae29db9853
 # ╠═83978260-372e-11eb-3034-71d93524b5f9
 # ╠═d313c510-35d0-11eb-28e4-9de2f998c526
@@ -423,11 +466,6 @@ pca.components_[1,:]
 # ╠═ce469830-3726-11eb-2483-9b23c88fa945
 # ╠═4d98e940-3681-11eb-2034-259a284343f5
 # ╠═d96aaa60-3697-11eb-34f4-7d6d847089a4
-# ╠═70058230-372c-11eb-2951-bb6c9f96c587
-# ╠═a63ff470-372c-11eb-154e-5bdf42ff336a
-# ╠═b710c3b0-372c-11eb-39ef-2b16c3b44e46
-# ╠═0f7b0ab0-372d-11eb-014d-cd94adcd949e
-# ╠═20c69d4e-372f-11eb-27bc-b7a1ec0c23bc
 # ╠═6d522dd2-3683-11eb-206b-3f3052492622
 # ╠═28cc25b0-3685-11eb-3f53-0b32f5135f2c
 # ╠═a81a53a0-3685-11eb-3169-7d7be58f9039
@@ -457,7 +495,6 @@ pca.components_[1,:]
 # ╠═a11770a0-369f-11eb-183f-3559fde51376
 # ╠═a164f462-369f-11eb-1ae5-698510068e43
 # ╠═ce549bc0-3743-11eb-01cb-bfeca5d4acbf
-# ╠═ce6b3100-3743-11eb-3b08-cdcff67da52b
 # ╠═ce828990-3743-11eb-19f0-916a3d16b085
 # ╠═ce983470-3743-11eb-28d6-57d29ddb834f
 # ╠═ceac0a90-3743-11eb-1cce-e7b4c8eb5a55
@@ -467,3 +504,5 @@ pca.components_[1,:]
 # ╠═cee5b830-3743-11eb-1bea-55606f41ea57
 # ╠═cefce9ae-3743-11eb-10b0-715d2ad4a2fd
 # ╠═cf0bddd0-3743-11eb-3799-db73c43b0aac
+# ╠═a539b1c2-375d-11eb-0cbb-2f5269f0023f
+# ╠═27b66352-375e-11eb-24bf-1bfeed9b7386
