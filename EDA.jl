@@ -64,8 +64,8 @@ begin
 		push!(names, Symbol(name))
 	end
 	# apply column names to dataframes
-	names!(df_train, [names..., :class])
-	names!(df_test, [names..., :class])
+	df_train = rename(df_train, [names..., :class])
+	df_test = rename(df_test, [names..., :class])
 end
 
 # ╔═╡ 27244ebe-3759-11eb-2d88-0ba8438faee3
@@ -73,10 +73,16 @@ md"""
 There are six grade classes (1-5 and "U") and there are 38 data features per example.  Of the data features, 7 are numerical and the rest are categorical. The classes are fairly imbalanced, with class 4 totally unrepresented.
 """
 
+# ╔═╡ 3035eb40-37f4-11eb-3a63-a32e8341fb02
+df_train
+
+# ╔═╡ 29a41860-37f4-11eb-0e61-2515223f1458
+combine(g -> DataFrame(proportion=nrow(g)/nrow(df_train)), groupby(df_train, :class))
+
 # ╔═╡ b55f45b0-3785-11eb-38f7-e1bfd7e819ca
 # pie chart
 begin
-	local df = by(df_train, :class, g -> DataFrame(proportion=nrow(g)/nrow(df_train)))
+	local df = combine(g -> DataFrame(proportion=nrow(g)/nrow(df_train)), groupby(df_train, :class))
 	clf()
 	figure()
 	title("Class Label Proportions")
@@ -94,7 +100,7 @@ begin
 	clf()
 	fig, axs = subplots(6, 6, sharey=true, figsize=(10,10))
 	for i = 1:(length(names)-2) # just show 36 of 38, for aesthetics
-		axs[i].hist(df_train[names[i]], bins=15)
+		axs[i].hist(df_train[:, names[i]], bins=15)
 		axs[i].set_title(names[i])
 	end
 	subplots_adjust(hspace=0.5)
@@ -116,7 +122,7 @@ begin
 	clf()
 	figure()
 	for class in groupby(df_train, :class)
-		scatter(class[:hardness], class[:carbon], label=class[1, :class])
+		scatter(class[:, :hardness], class[:, :carbon], label=class[1, :class])
 	end
 	gcf()
 end
@@ -145,10 +151,10 @@ begin
 	# peel off all String-type columns
 	str_cols = [names[i] for (i,col) in enumerate(eachcol(df_train)) if typeof(col[1]) == String && i < 39]
 	# one-hot-drop-one-encode
-	one_hot_encoded = one_hot_encoder.fit_transform(convert(Matrix, df_train[str_cols]))
+	one_hot_encoded = one_hot_encoder.fit_transform(convert(Matrix, df_train[:, str_cols]))
 	# put one_hot_encoded back into DF form, attach col names
 	converted = convert(DataFrame, one_hot_encoded)
-	names!(converted, [convert(Symbol, name) for name in one_hot_encoder.get_feature_names()])
+	converted = rename(converted, [convert(Symbol, name) for name in one_hot_encoder.get_feature_names()])
 end
 
 # ╔═╡ ba96b11e-3763-11eb-201b-a7d75f5c2407
@@ -162,17 +168,24 @@ begin
 	numerics_train = convert(Matrix, df_train[:, num_cols])
 	stdscaler = StandardScaler()
 	numerics_train = convert(DataFrame, stdscaler.fit_transform(numerics_train))
-	names!(numerics_train, num_cols)
+	numerics_train = rename(numerics_train, num_cols)
 	numerics_test = convert(Matrix, df_test[:, num_cols])
 	numerics_test = convert(DataFrame, stdscaler.transform(numerics_test))
-	names!(numerics_test, num_cols)
+	numerics_test = rename(numerics_test, num_cols)
 end
 
-# ╔═╡ d313c510-35d0-11eb-28e4-9de2f998c526
-clean_training_data = hcat(numerics_train, converted)
+# ╔═╡ a5bdcc10-37f0-11eb-1f37-0b29a30b8927
+md"""
+Now we can recombine the numerical and encoded data.  It is also a good time to drop the non-relevant physical features.
+"""
 
-# ╔═╡ a1d25690-372b-11eb-17ad-b73016fa7b55
-select!(clean_training_data, Not(:bore)) # bore
+# ╔═╡ d313c510-35d0-11eb-28e4-9de2f998c526
+begin
+	# combine pre-processed data
+	clean_training_data = hcat(numerics_train, converted)
+	# drop length, width, thickness, and bore size data
+	select!(clean_training_data, Not(:bore)) # bore
+end
 
 # ╔═╡ 8f22eb2e-374a-11eb-3d32-43a290d79ea8
 begin
@@ -182,7 +195,7 @@ begin
 end
 
 # ╔═╡ 14accaa0-3728-11eb-1a83-43ac80710b65
-unique(clean_training_data[:strength])
+unique(clean_training_data[:, :strength])
 
 # ╔═╡ 5aa46890-3680-11eb-30af-a7af3580042b
 size(clean_training_data)
@@ -207,12 +220,12 @@ size(clean_training_data)
 
 
 # ╔═╡ 29d9d1e0-3695-11eb-3ab2-4ff888669c41
-test_encoded = one_hot_encoder.transform(convert(Matrix, df_test[str_cols]))
+test_encoded = one_hot_encoder.transform(convert(Matrix, df_test[:, str_cols]))
 
 # ╔═╡ 33cb0a20-369a-11eb-04f0-59404ead383c
 begin
 	test_converted = convert(DataFrame, test_encoded)
-		names!(test_converted, [convert(Symbol, name) for name in one_hot_encoder.get_feature_names()])
+		test_converted = rename(test_converted, [convert(Symbol, name) for name in one_hot_encoder.get_feature_names()])
 end
 
 # ╔═╡ 29ece4b0-3695-11eb-1367-1988b8a20517
@@ -232,7 +245,7 @@ begin
 end
 
 # ╔═╡ ce828990-3743-11eb-19f0-916a3d16b085
-unique(df_train[:class])
+unique(df_train[:, :class])
 
 # ╔═╡ cebfb9a2-3743-11eb-06df-27ca3aecb1a1
 begin
@@ -313,13 +326,13 @@ begin
 	svc_probs = [
 		svc_ensemble[i].predict_proba(transformed_training_data) for i ∈ 1:nb_SVMs]
 	# avg over SVMs by class for each example (n_samples, n_classes) 
-	class_probabilities = zeros(nrow(df_train), length(unique(df_train[:class])))
+	class_probabilities = zeros(nrow(df_train), length(unique(df_train[:, :class])))
 	# loop over SVMs
 	for mat ∈ svc_probs
 		# one ROC per mat (SVM)
-		push!(aurocs, roc_auc_score(df_train[:class], mat, multi_class="ovr"))
+		push!(aurocs, roc_auc_score(df_train[:, :class], mat, multi_class="ovr"))
 		# loop over classes
-		for c ∈ 1:length(unique(df_train[:class]))
+		for c ∈ 1:length(unique(df_train[:, :class]))
 			# loop over examples
 			for e ∈ 1:nrow(df_train)
 				# accumulate probabilities
@@ -346,7 +359,7 @@ class_probabilities
 class_probabilities
 
 # ╔═╡ 814ac480-3734-11eb-13ef-a7f000537101
-roc_auc_score(df_train[:class], class_probabilities, multi_class="ovr")
+roc_auc_score(df_train[:, :class], class_probabilities, multi_class="ovr")
 
 # ╔═╡ 27de9e22-3695-11eb-17ee-1d263b5128e4
 svm_scores = [svc_ensemble[i].score(transformed_training_data, df_train.class) for i ∈ 1:nb_SVMs]
@@ -430,6 +443,8 @@ str_cols[[7, 9, 29]]
 # ╟─6075f110-3722-11eb-228e-67a4b6fd8e79
 # ╠═40338f72-3759-11eb-2f23-a56baa6bb364
 # ╟─27244ebe-3759-11eb-2d88-0ba8438faee3
+# ╠═3035eb40-37f4-11eb-3a63-a32e8341fb02
+# ╠═29a41860-37f4-11eb-0e61-2515223f1458
 # ╠═b55f45b0-3785-11eb-38f7-e1bfd7e819ca
 # ╟─be196aa0-37e4-11eb-1d80-1beaf28195f2
 # ╠═9441cc20-3755-11eb-189a-3f44dd62bc13
@@ -440,8 +455,8 @@ str_cols[[7, 9, 29]]
 # ╠═478fde60-35d1-11eb-0f84-3f8344536cc0
 # ╟─ba96b11e-3763-11eb-201b-a7d75f5c2407
 # ╠═ecd57112-3729-11eb-37a5-61ae29db9853
+# ╟─a5bdcc10-37f0-11eb-1f37-0b29a30b8927
 # ╠═d313c510-35d0-11eb-28e4-9de2f998c526
-# ╠═a1d25690-372b-11eb-17ad-b73016fa7b55
 # ╠═8f22eb2e-374a-11eb-3d32-43a290d79ea8
 # ╠═14accaa0-3728-11eb-1a83-43ac80710b65
 # ╠═5aa46890-3680-11eb-30af-a7af3580042b
