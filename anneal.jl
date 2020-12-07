@@ -131,14 +131,14 @@ end
 
 # ╔═╡ 6c3111d0-3801-11eb-18dc-fb8b3df686fe
 md"""
-There is some separation along the axes, but no example had two of the three measurements.  Training a model to predict on the numeric columns alone will not lead to good decision boundaries.  In lieu of making further effort to analyze these feature spaces manually, we reduce the number of dimensions using PCA.
+There is some separation along the axes, but no example had two of the three measurements.  Training a model to predict on the numeric columns alone may not lead to sufficiently accurate decision functions.  The number of multi-label categorical features makes visualizing relationships cumbersome.  To simplify the problem, we reduce the number of dimensions using PCA.
 """
 
 # ╔═╡ a2124920-3754-11eb-2468-fdde8eec9a6d
 md"""
 ## Approach
 
-To render the problem more approachable, we decided to reduce the dimensionality of the input data via Principal Component Analysis (PCA). After dimensional reduction, we train an ensemble of Support Vector Machines (SVMs) to perform multi-class classification.  The reason for using an ensemble instead of a single SVM for classification is the small number of training data; the weak learners of the ensemble will help capture more variance of the original data set without overfitting.
+To render the problem more approachable, we decided to reduce the dimensionality of the input data via Principal Component Analysis (PCA). After dimensional reduction, we train an ensemble of Support Vector Machines (SVMs) to perform multi-class classification.  The rationale for using an ensemble instead of a single SVM for classification is the small number of training data; the weak learners of the ensemble will help capture more variance of the original data set without overfitting.
 
 Here is the Data Flow Diagram describing the ML architechture we employed:
 
@@ -154,12 +154,13 @@ Categorical data must be cast to pseudo-numeric for PCA.  We used one-hot-drop-o
 The `String`-type columns of data are the only ones that should be encoded.  Column 39 is the classification label, so it is also excluded from encoding.  The net result is an addition of 5 feature columns.
 """
 
+# ╔═╡ c7599660-386d-11eb-2b07-814e7225699c
+# id the String-type columns
+str_cols = [names[i] for (i,col) ∈ enumerate(eachcol(df_train)) if 
+			typeof(col[1]) == String && i < 39]
+
 # ╔═╡ 478fde60-35d1-11eb-0f84-3f8344536cc0
 begin
-	# peel off all String-type columns
-	str_cols = 
-		[names[i] for (i,col) ∈ enumerate(eachcol(df_train)) if 
-			typeof(col[1]) == String && i < 39]
 	# prepare the one-hot-drop-one encoder
 	one_hot_encoder = OneHotEncoder(drop="first", sparse=false)
 	# do the encoding
@@ -194,20 +195,6 @@ md"""
 Now we can recombine the numerical and encoded data.  It is also a good time to drop the non-relevant physical features.
 """
 
-# ╔═╡ d313c510-35d0-11eb-28e4-9de2f998c526
-begin
-	# combine pre-processed data
-	clean_training_data = hcat(numerics_train, train_encoded)
-	clean_test_data = hcat(numerics_test, test_encoded)
-	# drop length, width, thickness, and bore size data
-	for df ∈ [clean_training_data, clean_test_data]
-		for col ∈ [:bore, :len, :width, :thick]
-			select!(df, Not(col))
-		end
-	end
-	clean_training_data
-end
-
 # ╔═╡ fed178d0-37f8-11eb-0dc5-a1cd4ed4d80b
 md"""
 ## Principal Component Analysis
@@ -215,37 +202,97 @@ md"""
 PCA is performed with `sklearn` to reduce the variable space to only as many dimensions as needed.  After learning the principal component vectors of the feature space, the training and test data must be transformed into principal component space (PC-space), as approximated by the first $n$ PC vectors.  The total explained variance is plotted for the number of factors used:
 """
 
-# ╔═╡ 72c09d4e-385a-11eb-211f-45fa106974a5
-begin
-	pca1 = PCA() 
-	pca1.fit(convert(Matrix, clean_training_data))
-	figure()
-	varsums = [sum(pca1.explained_variance_ratio_[1:i]) for i ∈ 1:pca1.n_components_]
-	scatter(1:pca1.n_components_, varsums)
-	xlabel("Factors")
-	ylabel("Total Explained Variance")
-	gcf()
-end
-
-# ╔═╡ 1499e9f0-385c-11eb-2aba-f3c89e8b0531
+# ╔═╡ e79445c0-3808-11eb-2cf2-614725027eb5
 md"""
-The threshold is set at 60% and the data are transformed into PC-space.
+We can start to see that the data have been made much more separable.  The features from the original data which have the largest contributions are:
 """
 
-# ╔═╡ d33a11c0-35d0-11eb-1aa8-37175b05bac1
+# ╔═╡ 72565bb0-380b-11eb-2914-c55ef743a076
+md"""
+The hardness, carbon content, and tensile strength are the most important features of the first 3 principal components.  They are not the only important features, but they make the largest contributions.  Intuitively, this is good--the grade of steel is naturally dependent on these features (a fact that the PCA determined for itself!).
+
+The most important feature for the fourth principal component would be "x6_N", meaning whether or not the steel formulation is non-aging.
+
+## Support Vector Machine Classification
+SVM can perform multi-class classification by learning multiple decision boundaries within a mutli-dimensional space (in this case, PC-space).  We chose to use an ensemble of SVMs trained on bootstrapped data to capture additional variance beyond what a single learner can offer.
+"""
+
+# ╔═╡ 1d7e9f60-380d-11eb-1b9b-d97c74029b90
+md"""
+To assess the predictive quality of each SVM, the Area Under the Receiver Operating Characteristic Curve (AUROC) is calculated for each learner by comparing it against the original (full) training data.  This should be done slightly differently (each learner should be internally validated against the training data not included in its bootstrapped set), but this approach was chosen for expedience.  As such, these are not "true" AUROCs; they are handy approximations.
+"""
+
+# ╔═╡ 74a5b09e-3810-11eb-1c72-19fff44bb994
+md"""
+The probabilities for each class according to the ensemble are calculated on every example, and summing these over the training data returns a very good approximation of the original number of examples of each class.
+"""
+
+# ╔═╡ b849d250-3810-11eb-1cfd-33bc2e0edd08
+md"""
+## Model Validation on Operating Data
+
+The time has come to evaluate the model on our reserved testing data.  First, an array of probability matrices is collected, with one matrix for each SVM, containing the class probability estimates for each class on each test example.
+"""
+
+# ╔═╡ ff3270a0-3810-11eb-2ae1-99cc096d7a28
+md"""
+The probabilities are attenuated by multiplying them against the SVMs' normalized training AUROC scores, and accumulating the sums so that we end up with an array of 5 weighted class scores for each test example.  The largest score decides the classification.
+"""
+
+# ╔═╡ 2432c320-3814-11eb-1a5e-47d42e372ec7
+md"""
+## ROC Curves for Ensemble
+
+The ensemble's ROC curve is determined for each class represented in the test data.  There are no examples of class 1 steel in the test set, so its ROC cannot be calculated.  Ultimately, the ensemble model's performance on the test data is roughly as good as the ensemble AUROC previously estimated using the training data, and the model does a fairly good job of predicting the grade of steel based on metrics available to in-line monitoring systems.
+"""
+
+# ╔═╡ c4f3bd20-3871-11eb-0762-29a37d072e1b
 begin
-	pca = PCA(n_components=0.6) 
+	# some of these factors were discovered to be unavailable after ensemble analysis
+	drop_cols = [:bore, :len, :width, :thick, :x6_N, :x2_A, :x5_3, :x28_SHEET]
+	# pca variance threshold
+	pca_var_thresh = 0.67 # 0.67
+	# number of SVMs in the ensemble
+	nb_SVMs = 60
+	# enhanced auroc attenuation (not)
+	auroc_delta = false
+end;
+
+# ╔═╡ d313c510-35d0-11eb-28e4-9de2f998c526
+begin
+	# combine pre-processed data
+	clean_training_data = hcat(numerics_train, train_encoded)
+	clean_test_data = hcat(numerics_test, test_encoded)
+	# drop length, width, thickness, and bore size data
+	for df ∈ [clean_training_data, clean_test_data]
+		for col ∈ drop_cols
+			select!(df, Not(col))
+		end
+	end
+	clean_training_data
+end
+
+# ╔═╡ 72c09d4e-385a-11eb-211f-45fa106974a5
+begin
+	# create the PCA decomposer and learn PC space
+	pca = PCA() 
+	pca.fit(convert(Matrix, clean_training_data))
+	
+	figure()
+	varsums = [sum(pca.explained_variance_ratio_[1:i]) for i ∈ 1:pca.n_components_]
+	scatter(1:pca.n_components_, varsums)
+	xlabel("Factors")
+	ylabel("Total Explained Variance")
+	plot([0, pca.n_components_], [pca_var_thresh, pca_var_thresh], color="red", 
+		linestyle="--")
+	
+	pca = PCA(n_components=pca_var_thresh) 
 	pca.fit(convert(Matrix, clean_training_data))
 	transformed_training_data = pca.transform(convert(Matrix, clean_training_data))
 	transformed_test_data = pca.transform(convert(Matrix, clean_test_data))
-end;
-
-# ╔═╡ a11e94de-3805-11eb-3422-759c307d088a
-md"""
-Now instead of $(ncol(clean_training_data)) dimensions, our data have only $(pca.n_components_).
-
-We can visualize the class distributions in the hyperplanes defined by the first three principal component vectors.
-"""
+	
+	gcf()
+end
 
 # ╔═╡ 81ce29b0-3752-11eb-3cce-f1fae2ecd0ee
 # visualize distributions in hyperplanes of first three PCs
@@ -268,31 +315,22 @@ begin
 	gcf()
 end
 
-# ╔═╡ e79445c0-3808-11eb-2cf2-614725027eb5
-md"""
-We can start to see that the data have been made much more separable.  The features from the original data which have the largest contributions are:
-"""
-
 # ╔═╡ 4d98e940-3681-11eb-2034-259a284343f5
 begin
 	id = [m[2] for m ∈ findmax.([pca.components_[i,:] for i ∈ 1:pca.n_components_])]
 	DataFrames.names(clean_training_data)[id]
 end
 
-# ╔═╡ 72565bb0-380b-11eb-2914-c55ef743a076
+# ╔═╡ a11e94de-3805-11eb-3422-759c307d088a
 md"""
-The hardness, carbon content, and tensile strength are the most important features of the first 3 principal components.  They are not the only important features, but they make the largest contributions.  Intuitively, this is good--the grade of steel is naturally dependent on these features (a fact that the PCA determined for itself!).
+With the threshold at $(Int(round(pca_var_thresh*100)))% and the principal components selected, the data are transformed into PC-space.  Now instead of $(ncol(clean_training_data)) dimensions, our data have only $(pca.n_components_).
 
-The most important feature for the fourth principal component would be "x6_N", meaning whether or not the steel formulation is non-aging.
-
-## Support Vector Machine Classification
-SVM can perform multi-class classification by learning multiple decision boundaries within a mutli-dimensional space (in this case, PC-space).  We chose to use an ensemble of SVMs trained on bootstrapped data to capture additional variance beyond what a single learner can offer.
+We can visualize the class distributions in the hyperplanes defined by the first three principal component vectors.
 """
 
 # ╔═╡ 6d522dd2-3683-11eb-206b-3f3052492622
 begin
 	# create ensemble
-	nb_SVMs = 20
 	svc_ensemble = [SVC(decision_function_shape="ovr", break_ties=true, 
 			random_state=0, probability=true) for i ∈ 1:nb_SVMs]
 	# bootstrap data
@@ -310,11 +348,6 @@ begin
 		svc.fit(convert(Matrix, bootstrap_samples[i]), bootstrap_sample_labels[i])
 	end
 end
-
-# ╔═╡ 1d7e9f60-380d-11eb-1b9b-d97c74029b90
-md"""
-To assess the predictive quality of each SVM, the Area Under the Receiver Operating Characteristic Curve (AUROC) is calculated for each learner by comparing it against the original (full) training data.  This should be done slightly differently (each learner should be internally validated against the training data not included in its bootstrapped set), but this approach was chosen for expedience.  As such, these are not "true" AUROCs; they are handy approximations.
-"""
 
 # ╔═╡ db4af520-3731-11eb-30b5-c3ddde182cad
 begin
@@ -340,11 +373,6 @@ begin
 	class_probabilities ./= nb_SVMs
 end;
 
-# ╔═╡ 74a5b09e-3810-11eb-1c72-19fff44bb994
-md"""
-The probabilities for each class according to the ensemble are calculated on every example, and summing these over the training data returns a very good approximation of the original number of examples of each class.
-"""
-
 # ╔═╡ 4c04a3b0-373c-11eb-007c-4ba2f9af318b
 round.(sum.(eachcol(class_probabilities)), digits=1)
 
@@ -366,13 +394,6 @@ begin
 	gcf()
 end
 
-# ╔═╡ b849d250-3810-11eb-1cfd-33bc2e0edd08
-md"""
-## Model Validation on Operating Data
-
-The time has come to evaluate the model on our reserved testing data.  First, an array of probability matrices is collected, with one matrix for each SVM, containing the class probability estimates for each class on each test example.
-"""
-
 # ╔═╡ 2a349c10-3695-11eb-3c5f-6734facd0931
 begin
 	prob_mats = []
@@ -389,15 +410,8 @@ begin
 	end
 end
 
-# ╔═╡ ff3270a0-3810-11eb-2ae1-99cc096d7a28
-md"""
-The probabilities are attenuated by multiplying them against the SVMs' normalized training AUROC scores, and accumulating the sums so that we end up with an array of 5 weighted class scores for each test example.  The largest score decides the classification.
-"""
-
 # ╔═╡ a11770a0-369f-11eb-183f-3559fde51376
 begin
-	# for increasing effect of AUROC attenuation
-	auroc_delta = false
 	# loop over SVM probability matrices
 	for i ∈ 1:nb_SVMs
 		# multiply each value in matrix i in prob_mats by svm_score[i]
@@ -426,13 +440,6 @@ end
 # ╔═╡ 97fabff0-381a-11eb-3cf0-bf1dc364e7c0
 md"""
 The ensemble mis-classifies $(count(c -> c == false, result_df.correct)) of $(nrow(df_test)) test cases.
-"""
-
-# ╔═╡ 2432c320-3814-11eb-1a5e-47d42e372ec7
-md"""
-## ROC Curves for Ensemble
-
-The ensemble's ROC curve is determined for each class represented in the test data.  There are no examples of class 1 steel in the test set, so its ROC cannot be calculated.  Ultimately, the ensemble model's performance on the test data is roughly as good as the ensemble AUROC previously estimated using the training data, and the model does a fairly good job of predicting the grade of steel based on metrics available to in-line monitoring systems.
 """
 
 # ╔═╡ a8d51c5e-382b-11eb-2165-efdd6fbfc138
@@ -513,17 +520,16 @@ end
 # ╟─6c3111d0-3801-11eb-18dc-fb8b3df686fe
 # ╟─a2124920-3754-11eb-2468-fdde8eec9a6d
 # ╟─edd07970-3756-11eb-2032-978d73caf455
-# ╠═478fde60-35d1-11eb-0f84-3f8344536cc0
+# ╟─c7599660-386d-11eb-2b07-814e7225699c
+# ╟─478fde60-35d1-11eb-0f84-3f8344536cc0
 # ╟─ba96b11e-3763-11eb-201b-a7d75f5c2407
-# ╠═ecd57112-3729-11eb-37a5-61ae29db9853
+# ╟─ecd57112-3729-11eb-37a5-61ae29db9853
 # ╟─a5bdcc10-37f0-11eb-1f37-0b29a30b8927
-# ╠═d313c510-35d0-11eb-28e4-9de2f998c526
+# ╟─d313c510-35d0-11eb-28e4-9de2f998c526
 # ╟─fed178d0-37f8-11eb-0dc5-a1cd4ed4d80b
-# ╟─72c09d4e-385a-11eb-211f-45fa106974a5
-# ╟─1499e9f0-385c-11eb-2aba-f3c89e8b0531
-# ╠═d33a11c0-35d0-11eb-1aa8-37175b05bac1
+# ╠═72c09d4e-385a-11eb-211f-45fa106974a5
 # ╟─a11e94de-3805-11eb-3422-759c307d088a
-# ╟─81ce29b0-3752-11eb-3cce-f1fae2ecd0ee
+# ╠═81ce29b0-3752-11eb-3cce-f1fae2ecd0ee
 # ╟─e79445c0-3808-11eb-2cf2-614725027eb5
 # ╟─4d98e940-3681-11eb-2034-259a284343f5
 # ╟─72565bb0-380b-11eb-2914-c55ef743a076
@@ -531,7 +537,7 @@ end
 # ╟─1d7e9f60-380d-11eb-1b9b-d97c74029b90
 # ╠═db4af520-3731-11eb-30b5-c3ddde182cad
 # ╟─74a5b09e-3810-11eb-1c72-19fff44bb994
-# ╠═4c04a3b0-373c-11eb-007c-4ba2f9af318b
+# ╟─4c04a3b0-373c-11eb-007c-4ba2f9af318b
 # ╟─db6dd270-380d-11eb-1324-b7e4a36777ec
 # ╟─27de9e22-3695-11eb-17ee-1d263b5128e4
 # ╟─b849d250-3810-11eb-1cfd-33bc2e0edd08
@@ -542,3 +548,4 @@ end
 # ╟─97fabff0-381a-11eb-3cf0-bf1dc364e7c0
 # ╟─2432c320-3814-11eb-1a5e-47d42e372ec7
 # ╟─a8d51c5e-382b-11eb-2165-efdd6fbfc138
+# ╟─c4f3bd20-3871-11eb-0762-29a37d072e1b
