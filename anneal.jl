@@ -5,7 +5,7 @@ using Markdown
 using InteractiveUtils
 
 # ╔═╡ 6438b5e0-3758-11eb-0594-c7267760665f
-using CSV, DataFrames, ScikitLearn, StatsBase, LinearAlgebra, PyPlot
+using CSV, DataFrames, ScikitLearn, StatsBase, LinearAlgebra, PyPlot, PyCall
 
 # ╔═╡ a0953640-35b8-11eb-1357-37314995bbd0
 md"
@@ -27,10 +27,10 @@ Imagine an automated factory that makes milled steel parts from iron ore.  Somew
 
 # ╔═╡ 8f4f34e0-3756-11eb-2c5e-fbd1769a5605
 begin
-	@sk_import preprocessing : (OneHotEncoder, StandardScaler)
+	@sk_import preprocessing : (OneHotEncoder, StandardScaler, label_binarize)
 	@sk_import decomposition : PCA
 	@sk_import svm: SVC
-	@sk_import metrics : (roc_auc_score, plot_roc_curve)
+	@sk_import metrics : (roc_auc_score, plot_roc_curve, auc, roc_curve)
 end;
 
 # ╔═╡ 6075f110-3722-11eb-228e-67a4b6fd8e79
@@ -71,14 +71,13 @@ end
 
 # ╔═╡ 27244ebe-3759-11eb-2d88-0ba8438faee3
 md"""
-There are six grade classes (1-5 and "U") and there are 38 data features per example.  Of the data features, 7 are numerical and the rest are categorical. The classes are fairly imbalanced, with class 4 totally unrepresented.
+There are six grade classes (1-5 and "U") and there are 38 data features per example.  Of the data features, 7 are numerical and the rest are categorical. The classes are fairly imbalanced, with class 4 totally unrepresented.  Ultimately, this means that there are two caveats of this model: it will never be able to identify class 4 steel with the available training data, and we must beware of creating a classifier that simply asserts all steels are of the most common type.
 """
 
 # ╔═╡ 3035eb40-37f4-11eb-3a63-a32e8341fb02
 df_train
 
 # ╔═╡ b55f45b0-3785-11eb-38f7-e1bfd7e819ca
-# pie chart
 begin
 	local df = combine(g -> DataFrame(proportion=nrow(g)/nrow(df_train)), groupby(df_train, :class))
 	clf()
@@ -223,7 +222,7 @@ PCA is performed with `sklearn` to reduce the variable space to only as many dim
 
 # ╔═╡ d33a11c0-35d0-11eb-1aa8-37175b05bac1
 begin
-	pca = PCA(n_components=0.8) 
+	pca = PCA(n_components=4) 
 	pca.fit(convert(Matrix, clean_training_data))
 	transformed_training_data = pca.transform(convert(Matrix, clean_training_data))
 	transformed_test_data = pca.transform(convert(Matrix, clean_test_data))
@@ -243,7 +242,6 @@ Now we can visualize the class distributions in the hyperplanes defined by the f
 # ╔═╡ 81ce29b0-3752-11eb-3cce-f1fae2ecd0ee
 # visualize distributions in hyperplanes of first three PCs
 begin
-	
 	pc_combos = [[:x1, :x2], [:x1, :x3], [:x3, :x2]]
 	df_transformed_training_data = convert(DataFrame, transformed_training_data)
 	df_transformed_training_data[!, :class] = df_train[:, :class]
@@ -275,14 +273,13 @@ end
 
 # ╔═╡ 72565bb0-380b-11eb-2914-c55ef743a076
 md"""
-The hardness, carbon content, and tensile strength are the most important features of the first 3 principal components.  They are not the only important features, but they make the largest contributions.  Intuitively, this is good--the grade of steel is naturally dependent on these features (a fact that the PCA determined for itself!)
+The hardness, carbon content, and tensile strength are the most important features of the first 3 principal components.  They are not the only important features, but they make the largest contributions.  Intuitively, this is good--the grade of steel is naturally dependent on these features (a fact that the PCA determined for itself!).
+
+The most important feature for the fourth principal component is "x6_N".  That means "whether or not the 7th categorical feature's value is 'N'".  Yes, the 7th (thanks, Python!)  That is whether or not the steel is non-aging.
 
 ## Support Vector Machine Classification
 SVM can perform multi-class classification by learning multiple decision boundaries within a mutli-dimensional space (in this case, PC-space).  We chose to use an ensemble of SVMs trained on bootstrapped data to capture additional variance beyond what a single learner can offer.
 """
-
-# ╔═╡ 28cc25b0-3685-11eb-3f53-0b32f5135f2c
-# want to change this to sub-splitting
 
 # ╔═╡ 6d522dd2-3683-11eb-206b-3f3052492622
 begin
@@ -312,10 +309,9 @@ To assess the predictive quality of each SVM, the Area Under the Receiver Operat
 """
 
 # ╔═╡ db4af520-3731-11eb-30b5-c3ddde182cad
-# get rid of class_probabilities OR use them at end for final ROC (?)
 begin
 	aurocs = []
-	# run predict_proba on all examples for each SVM (50 x (n_samples, n_classes))
+	# run predict_proba on all examples for each SVM
 	svc_probs = [
 		svc_ensemble[i].predict_proba(transformed_training_data) for i ∈ 1:nb_SVMs]
 	# avg over SVMs by class for each example (n_samples, n_classes) 
@@ -352,15 +348,15 @@ The AUROC score of each individual learner is very high.  This is not actually i
 """
 
 # ╔═╡ 27de9e22-3695-11eb-17ee-1d263b5128e4
-aurocs
-
-# ╔═╡ 9b37a700-3810-11eb-3a27-61d14b382ccc
-md"""
-These scores are normalized for use in ensemble classification weighting.
-"""
-
-# ╔═╡ 29c73440-3695-11eb-1de0-4992f59f8b30
-normalize!(aurocs)
+# make this a histogram
+begin
+	figure()
+	hist(aurocs)
+	title("Ensemble AUROC Distribution")
+	xlabel("Area Under Curve")
+	ylabel("Number")
+	gcf()
+end
 
 # ╔═╡ b849d250-3810-11eb-1cfd-33bc2e0edd08
 md"""
@@ -399,7 +395,7 @@ begin
 		# multiply each value in matrix i in prob_mats by svm_score[i]
 		prob_mats[i] .*= aurocs[i] - 0.5*auroc_delta
 	end
-	# one array of 5 score sums for each test example
+	# one array of 5 score sums for each validation example
 	sums = zeros(nrow(df_test), length(unique(df_train.class)))
 	for i ∈ 1:nb_SVMs
 		for j ∈ 1:nrow(df_test)
@@ -408,7 +404,8 @@ begin
 			end
 		end
 	end
-end
+	probs = sums ./ sum.([sums[i, :] for i in 1:size(sums, 1)])
+end;
 
 # ╔═╡ ce549bc0-3743-11eb-01cb-bfeca5d4acbf
 begin
@@ -430,19 +427,79 @@ md"""
 Finally, we take a look at the ROC curves of the ensemble and its individual weak learners, and calculate the ensemble-averaged AUC.
 """
 
-# ╔═╡ dbe4084e-3817-11eb-3a98-4908c2e257ff
-# pack into callable function?
+# ╔═╡ a8d51c5e-382b-11eb-2165-efdd6fbfc138
+begin
+	function get_tpr(all_fpr, fprᵢ, tprᵢ)
+		all_tpr = zeros(length(all_fpr))
+		for (i, fpr) in enumerate(all_fpr)
+			idx = findlast(e -> e ≤ fpr, fprᵢ)
+			if isnothing(idx)
+				idx = 1
+			end
+			all_tpr[i] = tprᵢ[idx]
+		end
+		return all_tpr
+	end
+	
+	y_test = label_binarize(df_test.class, 
+		classes=["$(c[1])" for c in svc_ensemble[1].classes_])
+	y_score = probs
+	n_classes = 5
+	
+	fpr = [Float64[] for _ ∈ 1:5]
+	tpr = [Float64[] for _ ∈ 1:5]
+	roc_auc = zeros(5)
+	
+	for i ∈ 1:n_classes
+		fpr[i], tpr[i], _ = roc_curve(y_test[:, i], y_score[:, i])
+		tpr[i] = isnan(tpr[i][1]) ? zeros(length(tpr[i])) : tpr[i]
+		roc_auc[i] = auc(fpr[i], tpr[i])
+	end
+	
+	all_fpr = []
+	for sub_arr ∈ fpr
+		for e ∈ sub_arr
+			push!(all_fpr, e)
+		end
+	end
+	all_fpr = sort(unique(all_fpr))
+	
+	# Then interpolate all ROC curves at this points
+	mean_tpr = [zeros(length(all_fpr))]
+	
+	for i in 1:n_classes
+		mean_tpr[1] += get_tpr(all_fpr, fpr[i], tpr[i])
+	end
+	
+	mean_tpr = mean_tpr[1]
+	
+	# Finally average it and compute AUC
+	mean_tpr /= n_classes - 1
+	
+	mean_tpr[1] = 0
+	mean_tpr[end] = 1
+end;
 
-# ╔═╡ 3ab3dee0-3814-11eb-16d4-537cd026e2c2
-# calculate actual AUC
-
-# ╔═╡ 1686d330-3817-11eb-148b-1f2d48e58579
-# plot ROC
+# ╔═╡ 83560ee0-3826-11eb-321e-e19bb567773a
 begin
 	figure()
-	for svc ∈ svc_ensemble
-		plot_roc_curve(ml_model, convert(Matrix, clean_test_data), df_test[:, :class])
+
+	plot(all_fpr, mean_tpr,
+			 label="mean ROC (area = $(round(auc(all_fpr, mean_tpr), digits=3))",
+			 color="navy", linestyle=":", linewidth=4)
+
+	for i in 2:n_classes
+		plot(fpr[i], tpr[i], color="C$i",
+				 label="class $(svc_ensemble[1].classes_[i]) (area = $(round(roc_auc[i], digits=3)))")
 	end
+
+	plot([0, 1], [0, 1], "k--")
+	xlim([0.0, 1.0])
+	ylim([0.0, 1.05])
+	xlabel("False Positive Rate")
+	ylabel("True Positive Rate")
+	title("Receiver Operating Characteristics")
+	legend(loc="lower right")
 	gcf()
 end
 
@@ -477,7 +534,6 @@ end
 # ╟─e79445c0-3808-11eb-2cf2-614725027eb5
 # ╠═4d98e940-3681-11eb-2034-259a284343f5
 # ╟─72565bb0-380b-11eb-2914-c55ef743a076
-# ╠═28cc25b0-3685-11eb-3f53-0b32f5135f2c
 # ╠═6d522dd2-3683-11eb-206b-3f3052492622
 # ╟─1d7e9f60-380d-11eb-1b9b-d97c74029b90
 # ╠═db4af520-3731-11eb-30b5-c3ddde182cad
@@ -485,8 +541,6 @@ end
 # ╠═4c04a3b0-373c-11eb-007c-4ba2f9af318b
 # ╟─db6dd270-380d-11eb-1324-b7e4a36777ec
 # ╠═27de9e22-3695-11eb-17ee-1d263b5128e4
-# ╟─9b37a700-3810-11eb-3a27-61d14b382ccc
-# ╠═29c73440-3695-11eb-1de0-4992f59f8b30
 # ╟─b849d250-3810-11eb-1cfd-33bc2e0edd08
 # ╠═2a349c10-3695-11eb-3c5f-6734facd0931
 # ╟─ff3270a0-3810-11eb-2ae1-99cc096d7a28
@@ -494,6 +548,5 @@ end
 # ╠═ce549bc0-3743-11eb-01cb-bfeca5d4acbf
 # ╟─97fabff0-381a-11eb-3cf0-bf1dc364e7c0
 # ╟─2432c320-3814-11eb-1a5e-47d42e372ec7
-# ╠═dbe4084e-3817-11eb-3a98-4908c2e257ff
-# ╠═3ab3dee0-3814-11eb-16d4-537cd026e2c2
-# ╠═1686d330-3817-11eb-148b-1f2d48e58579
+# ╠═a8d51c5e-382b-11eb-2165-efdd6fbfc138
+# ╠═83560ee0-3826-11eb-321e-e19bb567773a
