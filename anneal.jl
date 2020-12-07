@@ -5,7 +5,7 @@ using Markdown
 using InteractiveUtils
 
 # ╔═╡ 6438b5e0-3758-11eb-0594-c7267760665f
-using CSV, DataFrames, ScikitLearn, StatsBase, LinearAlgebra, PyPlot, PyCall
+using CSV, DataFrames, ScikitLearn, StatsBase, PyPlot
 
 # ╔═╡ a0953640-35b8-11eb-1357-37314995bbd0
 md"
@@ -18,24 +18,24 @@ md"""
 ![](https://miro.medium.com/max/2400/1*3MTAI9UL6AcqYidc4RSG7A.jpeg)
 """
 
-# ╔═╡ af48970e-3755-11eb-28e7-2d3565bebbe2
-md"""
-## Goal
-
-Imagine an automated factory that makes milled steel parts from iron ore.  Somewhere along the line, you'll see something like the picture above: orange-hot steel rolling down a very long conveyor.  That steel is undergoing a process called annealing, and it has a major effect on the ultimate working properties of the steel.  If the annealing machines experience process deviations, the milling machines will need to adapt to the steel's new properties.  There is no time to get a human metallurgist to test each piece of steel and determine its grade, so we would like to train an AI on simple characterization data for rapid prediction of steel quality.
-"""
-
 # ╔═╡ 8f4f34e0-3756-11eb-2c5e-fbd1769a5605
 begin
 	@sk_import preprocessing : (OneHotEncoder, StandardScaler, label_binarize)
 	@sk_import decomposition : PCA
 	@sk_import svm: SVC
-	@sk_import metrics : (roc_auc_score, plot_roc_curve, auc, roc_curve)
+	@sk_import metrics : (roc_auc_score, auc, roc_curve)
 end;
+
+# ╔═╡ af48970e-3755-11eb-28e7-2d3565bebbe2
+md"""
+## Goal 🏭
+
+Imagine an automated factory that makes milled steel parts from iron ore.  Somewhere along the line, you'll see something like the picture above: orange-hot steel rolling down a very long conveyor.  That steel is undergoing a process called annealing, and it has a major effect on the ultimate working properties of the steel.  If the annealing machines experience process deviations, the milling machines will need to adapt to the steel's new properties.  There is no time to get a human metallurgist to test each piece of steel and determine its grade, so we would like to train an AI on simple characterization data for rapid prediction of steel quality.
+"""
 
 # ╔═╡ 6075f110-3722-11eb-228e-67a4b6fd8e79
 md"""
-## Data
+## Data 📊
 
 The UC Irvine ML dataset [Annealing](https://archive.ics.uci.edu/ml/datasets/Annealing) contains a total of 868 examples of characterization data from samples of steel annealed under various conditions and labeled by grade. 100 examples are reserved for testing the model (as "operational data"). These data are split between two files, `anneal.data` and `anneal.test`, with the column names provided in `anneal.names`.
 """
@@ -67,15 +67,8 @@ begin
 	# apply column names to dataframes
 	df_train = rename(df_train, [names..., :class])
 	df_test = rename(df_test, [names..., :class])
+	df_train
 end
-
-# ╔═╡ 27244ebe-3759-11eb-2d88-0ba8438faee3
-md"""
-There are six grade classes (1-5 and "U") and there are 38 data features per example.  Of the data features, 7 are numerical and the rest are categorical. The classes are fairly imbalanced, with class 4 totally unrepresented.  Ultimately, this means that there are two caveats of this model: it will never be able to identify class 4 steel with the available training data, and we must beware of creating a classifier that simply asserts all steels are of the most common type.
-"""
-
-# ╔═╡ 3035eb40-37f4-11eb-3a63-a32e8341fb02
-df_train
 
 # ╔═╡ b55f45b0-3785-11eb-38f7-e1bfd7e819ca
 begin
@@ -87,9 +80,11 @@ begin
 	gcf()
 end
 
-# ╔═╡ be196aa0-37e4-11eb-1d80-1beaf28195f2
+# ╔═╡ 27244ebe-3759-11eb-2d88-0ba8438faee3
 md"""
-Histograms of feature distributions:
+There are six grade classes (1-5 and "U") and there are 38 data features per example.  Of the data features, 7 are numerical and the rest are categorical. The classes are fairly imbalanced, with class 4 totally unrepresented.  Ultimately, this means that there are two caveats of this model: it will never be able to identify class 4 steel with the available training data, and we must beware of creating a classifier that simply asserts all steels are of the most common type.
+
+Feature histograms show there are some features with no data.  `anneal.names` claims these factors should have some missing values, and some "not applicable" values.  The data have apparently been corrupted, and that distinction no longer exists.
 """
 
 # ╔═╡ 9441cc20-3755-11eb-189a-3f44dd62bc13
@@ -106,8 +101,6 @@ end
 
 # ╔═╡ 2c667e10-3783-11eb-33b4-fdc606f5ab89
 md"""
-We can see there are some features with no data.  `anneal.names` claims these factors should have some missing values, and some "not applicable" values.  The data have been corrupted, and that distinction no longer exists.
-
 We can also see that our numerical variables have some decent-looking variance.  Unfortunately, some of these measurements are not applicable to our scenario: we will not be getting our operational data from sample bits of metal with recordable length, width, thickness, and/or bore size.  That leaves carbon content, hardness rating, and tensile strength, all of which can be measured by non-destructive methods [[$1$]](https://www.matec-conferences.org/articles/matecconf/pdf/2018/04/matecconf_nctam2018_05007.pdf) [[$2$]](https://www.buehler.com/nondestructive-testing.php#:~:text=Nondestructive%20testing%20(NDT)%20or%20Nondestructive,without%20altering%20or%20destroying%20it.&text=Typical%20types%20and%20method%20of,Rebound%2C%20and%20Ultrasonic%20Contact%20Impedance.) [[$3$]](https://www.bruker.com/products/x-ray-diffraction-and-elemental-analysis/handheld-xrf/applications/pmi/non-destructive-testing-ndt-xrf.html).
 
 Correlation plots of numeric feature spaces:
@@ -138,7 +131,7 @@ end
 
 # ╔═╡ 6c3111d0-3801-11eb-18dc-fb8b3df686fe
 md"""
-Clearly, the numeric columns alone will not lead to good decision boundaries.  Visualizing the categorical variables for correlation with class is messy.  It would be better if we could treat all of our features as [pseudo]numeric.
+There is some separation along the axes, but no example had two of the three measurements.  Training a model to predict on the numeric columns alone will not lead to good decision boundaries.  In lieu of making further effort to analyze these feature spaces manually, we reduce the number of dimensions using PCA.
 """
 
 # ╔═╡ a2124920-3754-11eb-2468-fdde8eec9a6d
@@ -164,7 +157,9 @@ The `String`-type columns of data are the only ones that should be encoded.  Col
 # ╔═╡ 478fde60-35d1-11eb-0f84-3f8344536cc0
 begin
 	# peel off all String-type columns
-	str_cols = [names[i] for (i,col) ∈ enumerate(eachcol(df_train)) if typeof(col[1]) == String && i < 39]
+	str_cols = 
+		[names[i] for (i,col) ∈ enumerate(eachcol(df_train)) if 
+			typeof(col[1]) == String && i < 39]
 	# prepare the one-hot-drop-one encoder
 	one_hot_encoder = OneHotEncoder(drop="first", sparse=false)
 	# do the encoding
@@ -217,26 +212,39 @@ end
 md"""
 ## Principal Component Analysis
 
-PCA is performed with `sklearn` to reduce the variable space to only as many dimensions as needed.  The threshold is for the number of retained principal components to account for 80% of original data variance. After learning the principal component vectors of the feature space, the training and test data must be transformed into PC-space, as approximated by the first $n$ PC vectors.
+PCA is performed with `sklearn` to reduce the variable space to only as many dimensions as needed.  After learning the principal component vectors of the feature space, the training and test data must be transformed into principal component space (PC-space), as approximated by the first $n$ PC vectors.  The total explained variance is plotted for the number of factors used:
+"""
+
+# ╔═╡ 72c09d4e-385a-11eb-211f-45fa106974a5
+begin
+	pca1 = PCA() 
+	pca1.fit(convert(Matrix, clean_training_data))
+	figure()
+	varsums = [sum(pca1.explained_variance_ratio_[1:i]) for i ∈ 1:pca1.n_components_]
+	scatter(1:pca1.n_components_, varsums)
+	xlabel("Factors")
+	ylabel("Total Explained Variance")
+	gcf()
+end
+
+# ╔═╡ 1499e9f0-385c-11eb-2aba-f3c89e8b0531
+md"""
+The threshold is set at 60% and the data are transformed into PC-space.
 """
 
 # ╔═╡ d33a11c0-35d0-11eb-1aa8-37175b05bac1
 begin
-	pca = PCA(n_components=4) 
+	pca = PCA(n_components=0.6) 
 	pca.fit(convert(Matrix, clean_training_data))
 	transformed_training_data = pca.transform(convert(Matrix, clean_training_data))
 	transformed_test_data = pca.transform(convert(Matrix, clean_test_data))
-	md"components: $(pca.n_components_)"
-end
+end;
 
 # ╔═╡ a11e94de-3805-11eb-3422-759c307d088a
 md"""
-Now instead of 47 dimensions, our data have only $(pca.n_components_).  The total variance of the original data captured by these principal components is ~ $(Int(round(sum(pca.explained_variance_ratio_), digits=2)*100))%.
-"""
+Now instead of $(ncol(clean_training_data)) dimensions, our data have only $(pca.n_components_).
 
-# ╔═╡ b578e0c0-35db-11eb-36c5-ef3331dffbed
-md"""
-Now we can visualize the class distributions in the hyperplanes defined by the first three principal component vectors.
+We can visualize the class distributions in the hyperplanes defined by the first three principal component vectors.
 """
 
 # ╔═╡ 81ce29b0-3752-11eb-3cce-f1fae2ecd0ee
@@ -262,7 +270,7 @@ end
 
 # ╔═╡ e79445c0-3808-11eb-2cf2-614725027eb5
 md"""
-We can start to see that the data have been made much more separable.  Which features from the original data have the largest contributions?
+We can start to see that the data have been made much more separable.  The features from the original data which have the largest contributions are:
 """
 
 # ╔═╡ 4d98e940-3681-11eb-2034-259a284343f5
@@ -275,7 +283,7 @@ end
 md"""
 The hardness, carbon content, and tensile strength are the most important features of the first 3 principal components.  They are not the only important features, but they make the largest contributions.  Intuitively, this is good--the grade of steel is naturally dependent on these features (a fact that the PCA determined for itself!).
 
-The most important feature for the fourth principal component is "x6_N".  That means "whether or not the 7th categorical feature's value is 'N'".  Yes, the 7th (thanks, Python!)  That is whether or not the steel is non-aging.
+The most important feature for the fourth principal component would be "x6_N", meaning whether or not the steel formulation is non-aging.
 
 ## Support Vector Machine Classification
 SVM can perform multi-class classification by learning multiple decision boundaries within a mutli-dimensional space (in this case, PC-space).  We chose to use an ensemble of SVMs trained on bootstrapped data to capture additional variance beyond what a single learner can offer.
@@ -305,7 +313,7 @@ end
 
 # ╔═╡ 1d7e9f60-380d-11eb-1b9b-d97c74029b90
 md"""
-To assess the predictive quality of each SVM, the Area Under the Receiver Operating Characteristic Curve (AUROC) is calculated for each learner by comparing it against the original (full) training data.
+To assess the predictive quality of each SVM, the Area Under the Receiver Operating Characteristic Curve (AUROC) is calculated for each learner by comparing it against the original (full) training data.  This should be done slightly differently (each learner should be internally validated against the training data not included in its bootstrapped set), but this approach was chosen for expedience.  As such, these are not "true" AUROCs; they are handy approximations.
 """
 
 # ╔═╡ db4af520-3731-11eb-30b5-c3ddde182cad
@@ -342,9 +350,9 @@ round.(sum.(eachcol(class_probabilities)), digits=1)
 
 # ╔═╡ db6dd270-380d-11eb-1324-b7e4a36777ec
 md"""
-The AUROC of the ensemble for the training data is quite good: $(round(roc_auc_score(df_train[:, :class], class_probabilities, multi_class="ovr"), digits=8))
+The AUROC of the ensemble for the training data is quite good: $(round(roc_auc_score(df_train[:, :class], class_probabilities, multi_class="ovr"), digits=3))
 
-The AUROC score of each individual learner is very high.  This is not actually ideal!  It is better to have weaker learners in an ensemble, because some of them will catch rare cases that the others will miss.
+The AUROC score of each individual learner is high.  However, few if any of these SVMs will be able to match the performance of the ensemble.
 """
 
 # ╔═╡ 27de9e22-3695-11eb-17ee-1d263b5128e4
@@ -362,7 +370,7 @@ end
 md"""
 ## Model Validation on Operating Data
 
-The time has come to evaluate the model on our reserved testing data.  Fist, an array of probability matrices is collected, with one matrix for each SVM, containing the class probability estimates for each class on each test example.
+The time has come to evaluate the model on our reserved testing data.  First, an array of probability matrices is collected, with one matrix for each SVM, containing the class probability estimates for each class on each test example.
 """
 
 # ╔═╡ 2a349c10-3695-11eb-3c5f-6734facd0931
@@ -422,13 +430,14 @@ The ensemble mis-classifies $(count(c -> c == false, result_df.correct)) of $(nr
 
 # ╔═╡ 2432c320-3814-11eb-1a5e-47d42e372ec7
 md"""
-## ROC Curve for Ensemble
+## ROC Curves for Ensemble
 
-Finally, we take a look at the ROC curves of the ensemble and its individual weak learners, and calculate the ensemble-averaged AUC.
+The ensemble's ROC curve is determined for each class represented in the test data.  There are no examples of class 1 steel in the test set, so its ROC cannot be calculated.  Ultimately, the ensemble model's performance on the test data is roughly as good as the ensemble AUROC previously estimated using the training data, and the model does a fairly good job of predicting the grade of steel based on metrics available to in-line monitoring systems.
 """
 
 # ╔═╡ a8d51c5e-382b-11eb-2165-efdd6fbfc138
 begin
+	# because I couldn't get scipy to interpolate things for me
 	function get_tpr(all_fpr, fprᵢ, tprᵢ)
 		all_tpr = zeros(length(all_fpr))
 		for (i, fpr) in enumerate(all_fpr)
@@ -440,22 +449,19 @@ begin
 		end
 		return all_tpr
 	end
-	
+	# the rest of this cell is a modified translation of the examples found at
+	# https://scikit-learn.org/stable/auto_examples/model_selection/plot_roc.html
 	y_test = label_binarize(df_test.class, 
 		classes=["$(c[1])" for c in svc_ensemble[1].classes_])
-	y_score = probs
 	n_classes = 5
-	
 	fpr = [Float64[] for _ ∈ 1:5]
 	tpr = [Float64[] for _ ∈ 1:5]
 	roc_auc = zeros(5)
-	
 	for i ∈ 1:n_classes
-		fpr[i], tpr[i], _ = roc_curve(y_test[:, i], y_score[:, i])
+		fpr[i], tpr[i], _ = roc_curve(y_test[:, i], probs[:, i])
 		tpr[i] = isnan(tpr[i][1]) ? zeros(length(tpr[i])) : tpr[i]
 		roc_auc[i] = auc(fpr[i], tpr[i])
 	end
-	
 	all_fpr = []
 	for sub_arr ∈ fpr
 		for e ∈ sub_arr
@@ -463,61 +469,47 @@ begin
 		end
 	end
 	all_fpr = sort(unique(all_fpr))
-	
-	# Then interpolate all ROC curves at this points
 	mean_tpr = [zeros(length(all_fpr))]
-	
 	for i in 1:n_classes
 		mean_tpr[1] += get_tpr(all_fpr, fpr[i], tpr[i])
 	end
-	
 	mean_tpr = mean_tpr[1]
-	
-	# Finally average it and compute AUC
 	mean_tpr /= n_classes - 1
-	
 	mean_tpr[1] = 0
 	mean_tpr[end] = 1
-end;
-
-# ╔═╡ 83560ee0-3826-11eb-321e-e19bb567773a
-begin
 	figure()
-
 	plot(all_fpr, mean_tpr,
-			 label="mean ROC (area = $(round(auc(all_fpr, mean_tpr), digits=3))",
-			 color="navy", linestyle=":", linewidth=4)
-
-	for i in 2:n_classes
+		label="mean   (area = $(round(auc(all_fpr, mean_tpr), digits=3)))",
+		color="navy", linestyle=":", linewidth=4)
+	for i in 2:n_classes # class "1" isn't in the testing set
+		class = svc_ensemble[1].classes_[i]
+		area = round(roc_auc[i], digits=3)
 		plot(fpr[i], tpr[i], color="C$i",
-				 label="class $(svc_ensemble[1].classes_[i]) (area = $(round(roc_auc[i], digits=3)))")
+		label="class $class (area = $area)")
 	end
-
 	plot([0, 1], [0, 1], "k--")
 	xlim([0.0, 1.0])
 	ylim([0.0, 1.05])
 	xlabel("False Positive Rate")
 	ylabel("True Positive Rate")
-	title("Receiver Operating Characteristics")
+	title("Ensemble Receiver Operating Characteristics")
 	legend(loc="lower right")
 	gcf()
 end
 
 # ╔═╡ Cell order:
 # ╟─a0953640-35b8-11eb-1357-37314995bbd0
+# ╟─6438b5e0-3758-11eb-0594-c7267760665f
 # ╟─b84dac80-3758-11eb-27a8-0f51c7f7b8c3
+# ╟─8f4f34e0-3756-11eb-2c5e-fbd1769a5605
 # ╟─af48970e-3755-11eb-28e7-2d3565bebbe2
-# ╠═6438b5e0-3758-11eb-0594-c7267760665f
-# ╠═8f4f34e0-3756-11eb-2c5e-fbd1769a5605
 # ╟─6075f110-3722-11eb-228e-67a4b6fd8e79
-# ╠═40338f72-3759-11eb-2f23-a56baa6bb364
+# ╟─40338f72-3759-11eb-2f23-a56baa6bb364
+# ╟─b55f45b0-3785-11eb-38f7-e1bfd7e819ca
 # ╟─27244ebe-3759-11eb-2d88-0ba8438faee3
-# ╠═3035eb40-37f4-11eb-3a63-a32e8341fb02
-# ╠═b55f45b0-3785-11eb-38f7-e1bfd7e819ca
-# ╟─be196aa0-37e4-11eb-1d80-1beaf28195f2
-# ╠═9441cc20-3755-11eb-189a-3f44dd62bc13
+# ╟─9441cc20-3755-11eb-189a-3f44dd62bc13
 # ╟─2c667e10-3783-11eb-33b4-fdc606f5ab89
-# ╠═f3fbdd8e-37ff-11eb-3415-07227ed8d254
+# ╟─f3fbdd8e-37ff-11eb-3415-07227ed8d254
 # ╟─6c3111d0-3801-11eb-18dc-fb8b3df686fe
 # ╟─a2124920-3754-11eb-2468-fdde8eec9a6d
 # ╟─edd07970-3756-11eb-2032-978d73caf455
@@ -527,12 +519,13 @@ end
 # ╟─a5bdcc10-37f0-11eb-1f37-0b29a30b8927
 # ╠═d313c510-35d0-11eb-28e4-9de2f998c526
 # ╟─fed178d0-37f8-11eb-0dc5-a1cd4ed4d80b
+# ╟─72c09d4e-385a-11eb-211f-45fa106974a5
+# ╟─1499e9f0-385c-11eb-2aba-f3c89e8b0531
 # ╠═d33a11c0-35d0-11eb-1aa8-37175b05bac1
 # ╟─a11e94de-3805-11eb-3422-759c307d088a
-# ╟─b578e0c0-35db-11eb-36c5-ef3331dffbed
-# ╠═81ce29b0-3752-11eb-3cce-f1fae2ecd0ee
+# ╟─81ce29b0-3752-11eb-3cce-f1fae2ecd0ee
 # ╟─e79445c0-3808-11eb-2cf2-614725027eb5
-# ╠═4d98e940-3681-11eb-2034-259a284343f5
+# ╟─4d98e940-3681-11eb-2034-259a284343f5
 # ╟─72565bb0-380b-11eb-2914-c55ef743a076
 # ╠═6d522dd2-3683-11eb-206b-3f3052492622
 # ╟─1d7e9f60-380d-11eb-1b9b-d97c74029b90
@@ -540,13 +533,12 @@ end
 # ╟─74a5b09e-3810-11eb-1c72-19fff44bb994
 # ╠═4c04a3b0-373c-11eb-007c-4ba2f9af318b
 # ╟─db6dd270-380d-11eb-1324-b7e4a36777ec
-# ╠═27de9e22-3695-11eb-17ee-1d263b5128e4
+# ╟─27de9e22-3695-11eb-17ee-1d263b5128e4
 # ╟─b849d250-3810-11eb-1cfd-33bc2e0edd08
 # ╠═2a349c10-3695-11eb-3c5f-6734facd0931
 # ╟─ff3270a0-3810-11eb-2ae1-99cc096d7a28
 # ╠═a11770a0-369f-11eb-183f-3559fde51376
-# ╠═ce549bc0-3743-11eb-01cb-bfeca5d4acbf
+# ╟─ce549bc0-3743-11eb-01cb-bfeca5d4acbf
 # ╟─97fabff0-381a-11eb-3cf0-bf1dc364e7c0
 # ╟─2432c320-3814-11eb-1a5e-47d42e372ec7
-# ╠═a8d51c5e-382b-11eb-2165-efdd6fbfc138
-# ╠═83560ee0-3826-11eb-321e-e19bb567773a
+# ╟─a8d51c5e-382b-11eb-2165-efdd6fbfc138
