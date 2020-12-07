@@ -211,7 +211,7 @@ We can start to see that the data have been made much more separable.  The featu
 md"""
 The hardness, carbon content, and tensile strength are the most important features of the first 3 principal components.  They are not the only important features, but they make the largest contributions.  Intuitively, this is good--the grade of steel is naturally dependent on these features (a fact that the PCA determined for itself!).
 
-The most important feature for the fourth principal component would be "x6_N", meaning whether or not the steel formulation is non-aging.
+The most important feature for the fourth principal component is "x0_TN", meaning whether or not the steel is in a particular family defined by its chemical makeup.
 
 ## Support Vector Machine Classification
 SVM can perform multi-class classification by learning multiple decision boundaries within a mutli-dimensional space (in this case, PC-space).  We chose to use an ensemble of SVMs trained on bootstrapped data to capture additional variance beyond what a single learner can offer.
